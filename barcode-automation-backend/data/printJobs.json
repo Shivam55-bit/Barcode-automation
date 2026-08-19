@@ -1,0 +1,61 @@
+[
+  {
+    "id": "PJ-8166",
+    "templateId": "test-tmpl-1787124694711",
+    "templateName": "API Automated Test Template",
+    "printerId": "prn-zebra-zt410",
+    "printerName": "Zebra ZT410 Industrial (Line 1)",
+    "copies": 2,
+    "recordCount": 1,
+    "status": "printing",
+    "format": "zpl",
+    "submittedBy": "Automated Test Suite",
+    "submittedAt": "2026-08-19T07:31:34.901Z",
+    "progressPercent": 15,
+    "zplOutput": "^XA\n^PW945\n^LL472\n^LH0,0\n^CI28\n^XZ",
+    "rawOutput": "^XA\n^PW945\n^LL472\n^LH0,0\n^CI28\n^XZ"
+  },
+  {
+    "id": "PJ-9021",
+    "templateId": "tmpl-gs1-logistics-102x152",
+    "templateName": "GS1-128 Logistics Shipping Pallet Label (4x6 in)",
+    "printerId": "prn-zebra-zt410",
+    "printerName": "Zebra ZT410 Industrial (Line 1)",
+    "copies": 250,
+    "recordCount": 50,
+    "status": "completed",
+    "format": "zpl",
+    "submittedBy": "David Chen",
+    "submittedAt": "2026-08-14T16:00:00Z",
+    "completedAt": "2026-08-14T16:04:12Z",
+    "progressPercent": 100
+  },
+  {
+    "id": "PJ-9022",
+    "templateId": "tmpl-fda-udi-pharma-80x50",
+    "templateName": "FDA UDI Medical Device Serialization Label",
+    "printerId": "prn-zebra-zd620",
+    "printerName": "Zebra ZD620 Desktop (Pharma Cleanroom)",
+    "copies": 50,
+    "recordCount": 50,
+    "status": "printing",
+    "format": "zpl",
+    "submittedBy": "Marcus Vance",
+    "submittedAt": "2026-08-14T18:10:00Z",
+    "progressPercent": 68
+  },
+  {
+    "id": "PJ-9023",
+    "templateId": "tmpl-retail-price-tag-50x30",
+    "templateName": "Retail Product Price & EAN-13 Tag",
+    "printerId": "prn-virtual-pdf",
+    "printerName": "Virtual PDF Vector Spooler",
+    "copies": 120,
+    "recordCount": 12,
+    "status": "queued",
+    "format": "pdf",
+    "submittedBy": "Elena Rostova",
+    "submittedAt": "2026-08-14T18:15:00Z",
+    "progressPercent": 0
+  }
+]

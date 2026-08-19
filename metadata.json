@@ -1,0 +1,7 @@
+{
+  "name": "BarCode Automation Studio - Enterprise Edition",
+  "description": "Industrial-grade desktop-class barcode and label designer, GS1 engine, template lifecycle manager, thermal print & ZPL/EPL generator, and batch printing system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

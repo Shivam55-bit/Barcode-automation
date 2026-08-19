@@ -1,0 +1,66 @@
+[
+  {
+    "id": "aud-1787124694962-869",
+    "timestamp": "2026-08-19T07:31:34.962Z",
+    "user": "Automated Test Suite",
+    "userRole": "Print Operator",
+    "action": "PRINT_JOB_DISPATCH",
+    "details": "Dispatched print job #PJ-8166 (2 copies, 1 records) to Zebra ZT410 Industrial (Line 1) via ZPL",
+    "entityId": "PJ-8166",
+    "entityName": "API Automated Test Template",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-1787124694857-864",
+    "timestamp": "2026-08-19T07:31:34.857Z",
+    "user": "Designer",
+    "userRole": "Label Designer",
+    "action": "CREATE_TEMPLATE",
+    "details": "Created new label template \"API Automated Test Template\"",
+    "entityId": "test-tmpl-1787124694711",
+    "entityName": "API Automated Test Template",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-101",
+    "timestamp": "2026-08-14T17:45:00Z",
+    "user": "Marcus Vance (Quality Reviewer)",
+    "userRole": "Quality Reviewer",
+    "action": "APPROVE_TEMPLATE",
+    "details": "Approved FDA UDI Medical Device Serialization Label (v2.1) following ISO 13485 verification check.",
+    "entityId": "tmpl-fda-udi-pharma-80x50",
+    "entityName": "FDA UDI Medical Device Serialization Label",
+    "ipAddress": "192.168.1.45"
+  },
+  {
+    "id": "aud-102",
+    "timestamp": "2026-08-14T17:15:20Z",
+    "user": "David Chen (Print Operator)",
+    "userRole": "Print Operator",
+    "action": "PRINT_JOB_DISPATCH",
+    "details": "Dispatched batch print job #PJ-9021 (500 copies) to Zebra ZT410 Industrial Line 1.",
+    "entityId": "pj-9021",
+    "entityName": "Batch Shipping Manifest Labels",
+    "ipAddress": "192.168.1.72"
+  },
+  {
+    "id": "aud-103",
+    "timestamp": "2026-08-14T16:30:10Z",
+    "user": "Elena Rostova (Label Designer)",
+    "userRole": "Label Designer",
+    "action": "CREATE_TEMPLATE",
+    "details": "Created new Chemical GHS Hazmat Classification Template with dual-language GHS statements.",
+    "entityId": "tmpl-chemical-ghs-105x74",
+    "entityName": "Chemical GHS Hazmat Classification",
+    "ipAddress": "192.168.1.33"
+  },
+  {
+    "id": "aud-104",
+    "timestamp": "2026-08-14T15:10:00Z",
+    "user": "Sarah Jenkins (Admin)",
+    "userRole": "Admin",
+    "action": "SYSTEM_CONFIG",
+    "details": "Updated thermal print server timeout thresholds and configured 600 DPI SATO printer endpoints.",
+    "ipAddress": "192.168.1.10"
+  }
+]
