@@ -57,14 +57,18 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
 
   const evaluatedContent = evaluateElementData(element, { record: recordData });
 
+  const isNonEditable = element.locked || element.isEditable === false;
+
   return (
     <div
       id={`canvas-el-${element.id}`}
-      className={`absolute select-none cursor-move transition-shadow duration-75 ${
+      className={`absolute select-none transition-shadow duration-75 ${
+        isNonEditable ? 'cursor-not-allowed ring-1 ring-amber-400/50' : 'cursor-move'
+      } ${
         isSelected
-          ? 'ring-1 ring-[#16a34a] shadow-xs'
+          ? isNonEditable ? 'ring-2 ring-amber-500 shadow-xs' : 'ring-1 ring-[#16a34a] shadow-xs'
           : 'hover:ring-1 hover:ring-[#93c5fd]'
-      } ${element.locked ? 'cursor-not-allowed' : ''}`}
+      }`}
       style={{
         left: `${leftPx}px`,
         top: `${topPx}px`,
@@ -78,7 +82,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
       onMouseDown={(e) => {
         if (e.button === 0) {
           onSelect(e, element);
-          if (!element.locked) {
+          if (!isNonEditable) {
             onStartDrag(e, element);
           }
         }
@@ -273,14 +277,17 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
       )}
 
       {/* Lock Indicator */}
-      {element.locked && (
-        <div className="absolute top-1 right-1 bg-amber-500/90 text-white p-0.5 rounded shadow-2xs">
+      {isNonEditable && (
+        <div
+          title="Non-Editable / Locked Element"
+          className="absolute top-1 right-1 bg-amber-500/90 text-white p-0.5 rounded shadow-2xs z-30 flex items-center justify-center"
+        >
           <Lock className="w-3 h-3" />
         </div>
       )}
 
-      {/* Resize & Rotate Handles if selected and not locked */}
-      {isSelected && !element.locked && (
+      {/* Resize & Rotate Handles if selected and editable */}
+      {isSelected && !isNonEditable && (
         <>
           {/* Top-Left */}
           <div

@@ -640,6 +640,13 @@ export default function App() {
 
   const handleDeleteSelected = () => {
     if (selectedElementIds.length === 0) return;
+    const hasNonEditable = currentTemplate.elements.some(
+      (el) => selectedElementIds.includes(el.id) && (el.isEditable === false || el.locked)
+    );
+    if (hasNonEditable) {
+      showToast('Cannot delete non-editable / locked element(s). Set Editable: Yes first.', 'error');
+      return;
+    }
     const nextElements = currentTemplate.elements.filter((el) => !selectedElementIds.includes(el.id));
     updateElements(nextElements);
     setSelectedElementIds([]);
@@ -1018,16 +1025,22 @@ export default function App() {
             const step = e.shiftKey ? 1.0 : e.altKey ? 0.05 : 0.2;
             const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
             const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-            const updates = selectedElementIds.map((id) => {
-              const el = currentTemplate.elements.find((item) => item.id === id);
-              if (!el) return { id, updates: {} };
-              const maxX = Math.max(0, currentTemplate.dimensions.width - el.width);
-              const maxY = Math.max(0, currentTemplate.dimensions.height - el.height);
-              const nextX = Math.min(maxX, Math.max(0, Number(((el.x || 0) + dx).toFixed(2))));
-              const nextY = Math.min(maxY, Math.max(0, Number(((el.y || 0) + dy).toFixed(2))));
-              return { id, updates: { x: nextX, y: nextY } };
-            });
-            updateMultipleElements(updates);
+            const updates = selectedElementIds
+              .filter((id) => {
+                const el = currentTemplate.elements.find((item) => item.id === id);
+                return el && el.isEditable !== false && !el.locked;
+              })
+              .map((id) => {
+                const el = currentTemplate.elements.find((item) => item.id === id)!;
+                const maxX = Math.max(0, currentTemplate.dimensions.width - el.width);
+                const maxY = Math.max(0, currentTemplate.dimensions.height - el.height);
+                const nextX = Math.min(maxX, Math.max(0, Number(((el.x || 0) + dx).toFixed(2))));
+                const nextY = Math.min(maxY, Math.max(0, Number(((el.y || 0) + dy).toFixed(2))));
+                return { id, updates: { x: nextX, y: nextY } };
+              });
+            if (updates.length > 0) {
+              updateMultipleElements(updates);
+            }
           }
         }
       }

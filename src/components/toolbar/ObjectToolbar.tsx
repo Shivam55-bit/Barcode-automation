@@ -727,6 +727,30 @@ export const ObjectToolbar: React.FC<ObjectToolbarProps> = (props) => {
 
       {/* ROW 2: CONTEXT-AWARE FORMATTING & PROPERTIES TOOLBAR */}
       <div className="flex items-center gap-1 h-7 px-1.5 bg-[#e8ecf2] border-b border-[#d8dfe8] overflow-x-auto text-[11px]">
+        {/* Global Element Editable Toggle */}
+        {props.selectedElement && (
+          <div className="flex items-center gap-1 bg-white border border-[#cbd5e1] rounded px-1.5 py-0.5 shrink-0 mr-1.5 shadow-2xs">
+            <span className="text-[10px] text-slate-700 font-bold">Editable:</span>
+            <select
+              value={props.selectedElement.isEditable === false ? 'no' : 'yes'}
+              onChange={(e) => {
+                if (props.onUpdateSelectedElement) {
+                  const isYes = e.target.value === 'yes';
+                  props.onUpdateSelectedElement({ isEditable: isYes, locked: !isYes });
+                }
+              }}
+              className={`h-4.5 text-[10.5px] font-bold rounded px-1 outline-none cursor-pointer ${
+                props.selectedElement.isEditable === false
+                  ? 'bg-amber-100 text-amber-950 border border-amber-400'
+                  : 'bg-emerald-50 text-emerald-900 border border-emerald-300'
+              }`}
+            >
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </select>
+          </div>
+        )}
+
         {/* BARCODE ELEMENT SELECTED */}
         {selectedBarcodeEl ? (
           <>

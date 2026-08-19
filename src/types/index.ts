@@ -234,6 +234,7 @@ export interface BaseElement extends PositionAndSize {
   name: string;
   type: ElementType;
   locked: boolean;
+  isEditable?: boolean; // When false, element is read-only and non-editable
   visible: boolean;
   printable?: boolean;
   opacity: number; // 0 to 1

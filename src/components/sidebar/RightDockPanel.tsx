@@ -267,6 +267,52 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
           <div className="space-y-4">
             {/* 1. Geometry & Position (Common to all elements) */}
             <Section title="Geometry & Layout">
+              {/* Editable Yes / No Option as requested */}
+              <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-slate-100">
+                <div>
+                  <label className="text-[10px] text-slate-700 font-bold block mb-0.5 flex items-center justify-between">
+                    <span>Editable</span>
+                    {selectedElement.isEditable === false && (
+                      <span className="text-[8.5px] bg-amber-100 text-amber-800 px-1 py-0.2 rounded font-mono font-bold">LOCKED</span>
+                    )}
+                  </label>
+                  <select
+                    value={selectedElement.isEditable === false ? 'no' : 'yes'}
+                    onChange={(e) => {
+                      const isYes = e.target.value === 'yes';
+                      updateProp({ isEditable: isYes, locked: !isYes });
+                    }}
+                    className={`w-full border rounded px-2 py-1 text-xs font-semibold outline-none transition-colors ${
+                      selectedElement.isEditable === false
+                        ? 'bg-amber-50 border-amber-400 text-amber-900 font-bold'
+                        : 'bg-white border-blue-500 text-slate-800 focus:ring-1 focus:ring-blue-500'
+                    }`}
+                  >
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 font-medium block mb-0.5">
+                    Object Name
+                  </label>
+                  <input
+                    type="text"
+                    value={selectedElement.name}
+                    disabled={selectedElement.isEditable === false}
+                    onChange={(e) => updateProp({ name: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                  />
+                </div>
+              </div>
+
+              {selectedElement.isEditable === false && (
+                <div className="p-2 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-800 flex items-center gap-1.5 mb-2">
+                  <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>Element is <b>Non-Editable</b>. Change to <b>Yes</b> above to enable editing.</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] text-slate-500 font-medium block mb-0.5">
@@ -275,9 +321,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                   <input
                     type="number"
                     step="0.5"
+                    disabled={selectedElement.isEditable === false}
                     value={selectedElement.x}
                     onChange={(e) => updateProp({ x: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
                 <div>
@@ -287,9 +334,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                   <input
                     type="number"
                     step="0.5"
+                    disabled={selectedElement.isEditable === false}
                     value={selectedElement.y}
                     onChange={(e) => updateProp({ y: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
                 <div>
@@ -299,9 +347,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                   <input
                     type="number"
                     step="0.5"
+                    disabled={selectedElement.isEditable === false}
                     value={selectedElement.width}
                     onChange={(e) => updateProp({ width: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
                 <div>
@@ -311,9 +360,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                   <input
                     type="number"
                     step="0.5"
+                    disabled={selectedElement.isEditable === false}
                     value={selectedElement.height}
                     onChange={(e) => updateProp({ height: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
               </div>
@@ -325,9 +375,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                   </label>
                   <input
                     type="number"
+                    disabled={selectedElement.isEditable === false}
                     value={selectedElement.rotation || 0}
                     onChange={(e) => updateProp({ rotation: Number(e.target.value) % 360 })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
                 <div>
