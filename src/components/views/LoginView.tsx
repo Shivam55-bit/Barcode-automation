@@ -26,10 +26,18 @@ export const LoginView: React.FC<LoginViewProps> = ({
   initialUsers = INITIAL_USERS,
 }) => {
   // Only keep the Designer profile and hide all other roles
-  const designerUsers = initialUsers.filter(
+  const safeUsers = Array.isArray(initialUsers) && initialUsers.length > 0 ? initialUsers : INITIAL_USERS;
+  const designerUsers = safeUsers.filter(
     (u) => u.role === 'Designer' || u.role === 'Label Designer' || u.id === 'usr-designer'
   );
-  const activeDesigner = designerUsers[0] || initialUsers[0];
+  const activeDesigner = designerUsers[0] || safeUsers[0] || {
+    id: 'usr-designer',
+    name: 'Shivam',
+    email: 'shivam@gmail.com',
+    role: 'Designer',
+    department: 'Label Management',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces',
+  };
 
   const [selectedRole, setSelectedRole] = useState<string>(activeDesigner?.id || 'usr-designer');
   const [customEmail, setCustomEmail] = useState<string>(activeDesigner?.email || 'shivam@gmail.com');

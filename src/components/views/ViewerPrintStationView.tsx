@@ -52,7 +52,7 @@ export const ViewerPrintStationView: React.FC<ViewerPrintStationViewProps> = ({
 
   const selectedJob = batchJobs.find((j) => j.id === selectedJobId) || batchJobs[0];
   const selectedTemplate = templates.find((t) => t.id === selectedJob?.templateId) || templates[0];
-  const selectedItem = selectedJob?.items.find((it) => it.pageNumber === currentPage) || selectedJob?.items[0];
+  const selectedItem = selectedJob?.items?.find((it) => it.pageNumber === currentPage) || selectedJob?.items?.[0];
 
   // Helper to resolve dynamic values for this page on the canvas
   const getPageTemplateWithData = (item: BarcodeBatchItem | undefined): LabelTemplate => {

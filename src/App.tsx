@@ -126,7 +126,16 @@ export default function App() {
   const [isDocumentScriptsOpen, setIsDocumentScriptsOpen] = useState(false);
 
   // Current Template Reference
-  const currentTemplate = templates.find((t) => t.id === currentTemplateId) || templates[0];
+  const rawTemplate = templates.find((t) => t.id === currentTemplateId) || templates[0] || INITIAL_TEMPLATES[0];
+  const currentTemplate: LabelTemplate = {
+    ...rawTemplate,
+    elements: rawTemplate?.elements || [],
+    variables: rawTemplate?.variables || [],
+    sampleRecords: rawTemplate?.sampleRecords && rawTemplate.sampleRecords.length > 0 ? rawTemplate.sampleRecords : [{}],
+    tags: rawTemplate?.tags || ['Draft'],
+    dimensions: rawTemplate?.dimensions || { width: 100, height: 75, unit: 'mm', dpi: 300, orientation: 'landscape' },
+    margins: rawTemplate?.margins || { top: 2, right: 2, bottom: 2, left: 2, bleed: 1, safeZone: 2 },
+  };
 
   // Helper for flash toast notifications
   const showToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
@@ -1040,7 +1049,7 @@ export default function App() {
   ]);
 
   // Current record bound data for preview
-  const currentRecordData = currentTemplate.sampleRecords[viewport.previewRecordIndex] || {};
+  const currentRecordData = currentTemplate?.sampleRecords?.[viewport.previewRecordIndex] || currentTemplate?.sampleRecords?.[0] || {};
 
   const handleLoginSuccess = (user: UserProfile) => {
     setCurrentUser(user);
