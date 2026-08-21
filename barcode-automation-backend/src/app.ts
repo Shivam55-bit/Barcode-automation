@@ -12,6 +12,7 @@ import { viewerLogsRouter } from './routes/viewerLogs';
 import { datasetsRouter } from './routes/datasets';
 import { licenseRouter } from './routes/license';
 import { exportRouter } from './routes/export';
+import { softwareRouter } from './routes/software';
 import { SAMPLE_ENTERPRISE_DATASETS } from '../../src/services/databaseConnectorService';
 
 export function createBackendApp(): express.Application {
@@ -57,6 +58,8 @@ export function createBackendApp(): express.Application {
   app.use('/api/datasets', datasetsRouter);
   app.use('/api/license', licenseRouter);
   app.use('/api/export', exportRouter);
+  app.use('/api/software', softwareRouter);
+  app.use('/api/admin/software', softwareRouter);
 
   // Sample Enterprise Datasets
   app.get('/api/database/sample-datasets', (req, res) => {

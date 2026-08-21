@@ -243,14 +243,14 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       const deltaY = (e.clientY - dragStartPos.y) / scale;
       let { x, y, w, h } = resizeInitialState;
 
-      if (resizeHandle.includes('e')) w = Math.max(4, snapValue(w + deltaX));
-      if (resizeHandle.includes('s')) h = Math.max(3, snapValue(h + deltaY));
-      if (resizeHandle.includes('w')) {
+      if (resizeHandle.includes('right')) w = Math.max(4, snapValue(w + deltaX));
+      if (resizeHandle.includes('bottom')) h = Math.max(3, snapValue(h + deltaY));
+      if (resizeHandle.includes('left')) {
         const newW = Math.max(4, snapValue(w - deltaX));
         x = snapValue(Math.max(0, x + (w - newW)));
         w = newW;
       }
-      if (resizeHandle.includes('n')) {
+      if (resizeHandle.includes('top')) {
         const newH = Math.max(3, snapValue(h - deltaY));
         y = snapValue(Math.max(0, y + (h - newH)));
         h = newH;

@@ -27,6 +27,7 @@ import { WorkflowView } from './components/views/WorkflowView';
 import { ViewerPrintStationView } from './components/views/ViewerPrintStationView';
 import { DatasetManagerView } from './components/views/DatasetManagerView';
 import { LicenseManagerView } from './components/views/LicenseManagerView';
+import { SoftwareDownloadView } from './components/views/SoftwareDownloadView';
 import { PrinterCalibrationModal } from './components/dialogs/PrinterCalibrationModal';
 import { LoginView } from './components/views/LoginView';
 
@@ -69,7 +70,7 @@ export default function App() {
     'select' | 'text' | 'barcode' | 'qr' | 'datamatrix' | 'rect' | 'circle' | 'line' | 'table' | 'image'
   >('select');
   const [activeView, setActiveView] = useState<
-    'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer' | 'datasets' | 'license'
+    'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer' | 'datasets' | 'license' | 'software-download'
   >('designer');
   const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState<boolean>(false);
 
@@ -1182,6 +1183,10 @@ export default function App() {
           onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
           onNavigateToWorkflow={() => setActiveView('workflow')}
           onNavigateToViewer={() => setActiveView('viewer')}
+          onNavigateToDatasets={() => setActiveView('datasets')}
+          onNavigateToLicense={() => setActiveView('license')}
+          onNavigateToSoftwareDownload={() => setActiveView('software-download')}
+          onOpenCalibrationModal={() => setIsCalibrationModalOpen(true)}
           onSwitchUser={(user) => {
             setCurrentUser(user);
             showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
@@ -1906,6 +1911,14 @@ export default function App() {
         <LicenseManagerView
           currentUser={currentUser}
           onNavigateToDashboard={() => setActiveView('dashboard')}
+        />
+      )}
+
+      {activeView === 'software-download' && (
+        <SoftwareDownloadView
+          currentUser={currentUser}
+          onBackToDashboard={() => setActiveView('dashboard')}
+          onNavigateToLicense={() => setActiveView('license')}
         />
       )}
 

@@ -1468,7 +1468,7 @@
     ],
     "createdBy": "EHS Director",
     "createdAt": "2026-02-18T10:00:00Z",
-    "updatedAt": "2026-02-20T14:00:00Z",
+    "updatedAt": "2026-08-21T13:18:56.895Z",
     "variables": [
       {
         "id": "v1",
@@ -1669,9 +1669,9 @@
         "backgroundColor": "#ffffff",
         "checkDigit": true,
         "x": 74,
-        "y": 16,
-        "width": 25,
-        "height": 25,
+        "y": 15.5,
+        "width": 24.5,
+        "height": 25.5,
         "locked": false,
         "visible": true,
         "opacity": 1,

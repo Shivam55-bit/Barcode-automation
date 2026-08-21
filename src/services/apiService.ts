@@ -491,4 +491,53 @@ export const apiService = {
       });
     },
   },
+
+  // --- Enterprise Software Release & Desktop App Downloads ---
+  software: {
+    getLatestVersion: async () => {
+      return request<{
+        success: boolean;
+        data: any;
+        isLatest: boolean;
+        updateAvailable: boolean;
+      }>('/software/latest-version');
+    },
+
+    getVersionHistory: async () => {
+      return request<{
+        success: boolean;
+        totalReleases: number;
+        data: any[];
+      }>('/software/version-history');
+    },
+
+    checkUpdate: async (clientVersion: string) => {
+      return request<{
+        updateAvailable: boolean;
+        currentClientVersion: string;
+        latestVersion: string;
+        releaseDetails: any;
+      }>('/software/check-update', {
+        method: 'POST',
+        body: JSON.stringify({ clientVersion }),
+      });
+    },
+
+    uploadVersion: async (payload: {
+      version: string;
+      releaseName: string;
+      releaseNotes: string[];
+      fileSize?: string;
+      channel?: string;
+    }) => {
+      return request<{ success: boolean; message: string; data: any }>('/admin/software/upload-version', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+
+    getDownloadUrl: (target: string = 'win-x64', version: string = '2.5.0') => {
+      return `/api/software/download?target=${target}&v=${version}`;
+    },
+  },
 };

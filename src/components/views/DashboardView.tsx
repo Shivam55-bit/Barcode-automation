@@ -23,7 +23,9 @@ import {
   Tag,
   Copy,
   Trash2,
-  ExternalLink
+  ExternalLink,
+  Download,
+  Laptop
 } from 'lucide-react';
 import { LabelTemplate, PrinterDefinition, PrintJob, AuditLogEntry, UserProfile } from '../../types';
 
@@ -37,10 +39,12 @@ interface DashboardViewProps {
   onOpenTemplate: (id: string) => void;
   onOpenDesigner: () => void;
   onOpenPrintCenter: () => void;
+  onOpenAuditLogs?: () => void;
   onNavigateToWorkflow?: () => void;
   onNavigateToViewer?: () => void;
   onNavigateToDatasets?: () => void;
   onNavigateToLicense?: () => void;
+  onNavigateToSoftwareDownload?: () => void;
   onOpenCalibrationModal?: () => void;
   onSwitchUser?: (user: UserProfile) => void;
   onLogout?: () => void;
@@ -64,6 +68,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenAuditLogs,
   onNavigateToWorkflow,
   onNavigateToViewer,
+  onNavigateToDatasets,
+  onOpenCalibrationModal,
+  onNavigateToLicense,
+  onNavigateToSoftwareDownload,
   onSwitchUser,
   onLogout,
   onCreateNewTemplate,
@@ -245,6 +253,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </div>
                 <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded uppercase font-mono">
                   GUID
+                </span>
+              </button>
+            )}
+
+            {/* Desktop Software Download Button */}
+            {onNavigateToSoftwareDownload && (
+              <button
+                onClick={onNavigateToSoftwareDownload}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-700 hover:text-blue-700 bg-gradient-to-r from-blue-50/50 to-indigo-50/50 hover:from-blue-50 hover:to-indigo-50 border border-blue-200/60 shadow-2xs transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <Laptop className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
+                  <span className="font-bold text-slate-900 group-hover:text-blue-700">Desktop Software</span>
+                </div>
+                <span className="text-[9px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-2 py-0.5 rounded-md uppercase font-mono flex items-center gap-1 shadow-2xs">
+                  <Download className="w-2.5 h-2.5" />
+                  v2.5
                 </span>
               </button>
             )}
