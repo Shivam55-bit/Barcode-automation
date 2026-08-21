@@ -1,5 +1,49 @@
 [
   {
+    "id": "aud-1787341866337-347",
+    "timestamp": "2026-08-21T19:51:06.339Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-1787341101297-978",
+    "timestamp": "2026-08-21T19:38:21.297Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-1787341089731-129",
+    "timestamp": "2026-08-21T19:38:09.731Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-1787341087072-449",
+    "timestamp": "2026-08-21T19:38:07.072Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
     "id": "aud-1787340726441-797",
     "timestamp": "2026-08-21T19:32:06.442Z",
     "user": "Authenticated User",
