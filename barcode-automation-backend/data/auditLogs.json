@@ -1,5 +1,25 @@
 [
   {
+    "id": "aud-1787340726441-797",
+    "timestamp": "2026-08-21T19:32:06.442Z",
+    "user": "Authenticated User",
+    "userRole": "Operator",
+    "action": "DESKTOP_APP_DOWNLOAD",
+    "details": "User initiated direct download for BarcodeFlow Desktop Installer v2.5.0",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-1787340428117-808",
+    "timestamp": "2026-08-21T19:27:08.117Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
     "id": "aud-1787339357855-328",
     "timestamp": "2026-08-21T19:09:17.856Z",
     "user": "Shivam",
