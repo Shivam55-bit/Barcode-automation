@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { StorageService } from '../services/storageService';
 import { logBackendAudit } from '../services/auditService';
+import { installerService } from '../services/installerService';
 import fs from 'fs';
 import path from 'path';
 
@@ -41,9 +42,9 @@ const DEFAULT_RELEASES: SoftwareRelease[] = [
       'Dataset Manager: Drag & Drop Excel (.xlsx) & CSV import with dynamic variable binding',
       'Offline Local Storage & 100% Zero-Latency Desktop Runtime'
     ],
-    downloadURL: '/api/software/download?target=win-x64',
+    downloadURL: '/api/software/download?v=2.5.0',
     fileSize: '78.4 MB',
-    releaseDate: '2026-08-21',
+    releaseDate: '2026-08-22',
     status: 'active',
     channel: 'stable',
     sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
@@ -64,7 +65,7 @@ const DEFAULT_RELEASES: SoftwareRelease[] = [
       'Direct LPT / COM / TCP Raw socket thermal printer communications',
       'Full Vector SVG and high-DPI raster image imports'
     ],
-    downloadURL: '/api/software/download?target=win-x64&v=2.4.0',
+    downloadURL: '/api/software/download?v=2.4.0',
     fileSize: '74.2 MB',
     releaseDate: '2026-07-15',
     status: 'active',
@@ -86,7 +87,7 @@ const DEFAULT_RELEASES: SoftwareRelease[] = [
       'Multi-format barcode generator (Code 128, EAN-13, QR Code, Data Matrix)',
       'Basic approval workflows and print job queues'
     ],
-    downloadURL: '/api/software/download?target=win-x64&v=2.0.0',
+    downloadURL: '/api/software/download?v=2.0.0',
     fileSize: '68.0 MB',
     releaseDate: '2026-05-10',
     status: 'deprecated',
@@ -151,38 +152,41 @@ softwareRouter.post('/check-update', (req: Request, res: Response) => {
 });
 
 // GET /api/software/download
+// Downloads the actual standalone Windows installer (.exe) with proper binary streaming headers
 softwareRouter.get('/download', (req: Request, res: Response) => {
   try {
-    const target = (req.query.target as string) || 'win-x64';
     const version = (req.query.v as string) || '2.5.0';
 
     logBackendAudit(
-      'System',
+      'Authenticated User',
       'Operator',
       'DESKTOP_APP_DOWNLOAD',
-      `User requested download for Desktop App v${version} (${target})`
+      `User initiated direct download for BarcodeFlow Desktop Installer v${version}`
     );
 
-    // Check if an actual compiled exe/installer exists in dist-electron-build/ or dist/
-    const possiblePaths = [
-      path.join(process.cwd(), 'dist-electron-build', 'BarcodeFlow_Setup.exe'),
-      path.join(process.cwd(), 'dist-electron-build', `BarcodeFlow-${version}-Setup.exe`),
-      path.join(process.cwd(), 'dist-electron', 'BarcodeFlow_Setup.exe'),
-    ];
+    const installer = installerService.findInstaller(version);
 
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        res.setHeader('Content-Disposition', `attachment; filename="BarcodeFlow_Setup_v${version}.exe"`);
-        res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
-        return res.sendFile(p);
-      }
+    if (!installer || !fs.existsSync(installer.filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: `Installer for version v${version} is currently not available on this server. Please contact Administrator.`
+      });
     }
 
-    // If binary not pre-compiled on host, stream dynamic GitHub release / source package download
-    const githubReleaseZip = 'https://github.com/Shivam55-bit/Barcode-automation/archive/refs/heads/main.zip';
-    return res.redirect(githubReleaseZip);
+    // Set production-grade binary file headers
+    res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
+    res.setHeader('Content-Disposition', `attachment; filename="${installer.fileName}"`);
+    res.setHeader('Content-Length', installer.size);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    // Stream the physical .exe file
+    const fileStream = fs.createReadStream(installer.filePath);
+    fileStream.pipe(res);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[software/download] Download stream error:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -194,6 +198,9 @@ softwareRouter.post('/upload-version', (req: Request, res: Response) => {
       return res.status(400).json({ error: 'version and releaseName are required' });
     }
 
+    // Ensure physical binary for new version is also generated in downloads
+    installerService.ensureInstallerBinaries();
+
     const releases = storage.read<SoftwareRelease>('software_releases', DEFAULT_RELEASES);
     const newRelease: SoftwareRelease = {
       version,
@@ -201,7 +208,7 @@ softwareRouter.post('/upload-version', (req: Request, res: Response) => {
       releaseName,
       releaseNotes: Array.isArray(releaseNotes) ? releaseNotes : [releaseNotes],
       downloadURL: `/api/software/download?v=${version}`,
-      fileSize: fileSize || '78 MB',
+      fileSize: fileSize || '78.4 MB',
       releaseDate: new Date().toISOString().split('T')[0],
       status: 'active',
       channel: channel || 'stable',

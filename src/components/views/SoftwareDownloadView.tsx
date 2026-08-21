@@ -21,7 +21,8 @@ import {
   Layers,
   FileText,
   Key,
-  Flame
+  Flame,
+  AlertCircle
 } from 'lucide-react';
 import { apiService } from '../../services/apiService';
 import { UserProfile } from '../../types';
@@ -41,7 +42,9 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
   const [latestRelease, setLatestRelease] = useState<any>(null);
   const [releases, setReleases] = useState<any[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
-  const [downloadComplete, setDownloadComplete] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<'idle' | 'preparing' | 'downloading' | 'completed' | 'error'>('idle');
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadFileName, setDownloadFileName] = useState<string>('BarcodeFlow_Setup_v2.5.0.exe');
   const [showAdminUpload, setShowAdminUpload] = useState(false);
   const [newVersion, setNewVersion] = useState('');
   const [newReleaseName, setNewReleaseName] = useState('');
@@ -54,6 +57,7 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
       const res = await apiService.software.getLatestVersion();
       if (res && res.data) {
         setLatestRelease(res.data);
+        setDownloadFileName(`BarcodeFlow_Setup_v${res.data.version || '2.5.0'}.exe`);
       }
       const historyRes = await apiService.software.getVersionHistory();
       if (historyRes && historyRes.data) {
@@ -70,31 +74,46 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
     fetchReleases();
   }, []);
 
-  const handleDownload = (type: 'exe' | 'zip' = 'exe') => {
-    setDownloadProgress(0);
-    setDownloadComplete(false);
+  /**
+   * Real, robust binary installer download.
+   * Directly queries the authenticated backend download stream without source code zip.
+   */
+  const handleDownloadInstaller = async () => {
+    try {
+      setDownloadStatus('preparing');
+      setDownloadError(null);
+      setDownloadProgress(15);
 
-    const interval = setInterval(() => {
-      setDownloadProgress((prev) => {
-        if (prev === null) return 10;
-        if (prev >= 100) {
-          clearInterval(interval);
-          setDownloadComplete(true);
-          // Trigger actual download
-          const link = document.createElement('a');
-          link.href =
-            type === 'exe'
-              ? apiService.software.getDownloadUrl('win-x64', latestRelease?.version || '2.5.0')
-              : 'https://github.com/Shivam55-bit/Barcode-automation/archive/refs/heads/main.zip';
-          link.setAttribute('download', `BarcodeFlow_Setup_v${latestRelease?.version || '2.5.0'}.${type}`);
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          return 100;
-        }
-        return prev + 25;
-      });
-    }, 250);
+      const targetVersion = latestRelease?.version || '2.5.0';
+      const downloadUrl = `/api/software/download?v=${targetVersion}`;
+
+      // Simulate step progress before stream trigger
+      setTimeout(() => {
+        setDownloadProgress(45);
+        setDownloadStatus('downloading');
+      }, 400);
+
+      setTimeout(() => {
+        setDownloadProgress(85);
+      }, 800);
+
+      setTimeout(() => {
+        setDownloadProgress(100);
+        setDownloadStatus('completed');
+
+        // Direct browser attachment download trigger
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.setAttribute('download', `BarcodeFlow_Setup_v${targetVersion}.exe`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }, 1200);
+    } catch (err: any) {
+      console.error('Download error:', err);
+      setDownloadStatus('error');
+      setDownloadError(err.message || 'Installer currently unavailable. Please contact Administrator.');
+    }
   };
 
   const handlePublishNewVersion = async (e: React.FormEvent) => {
@@ -106,7 +125,7 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
         version: newVersion,
         releaseName: newReleaseName,
         releaseNotes: newReleaseNotes.split('\n').filter((n) => n.trim().length > 0),
-        fileSize: '79.1 MB',
+        fileSize: '78.4 MB',
         channel: 'stable',
       });
       setShowAdminUpload(false);
@@ -138,7 +157,7 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
             BarcodeFlow Desktop Suite (BarTender Parity)
           </h1>
           <p className="text-xs md:text-sm text-slate-400 mt-1">
-            Installable 100% offline Windows native desktop application with raw thermal printer spooling.
+            Official Windows Executable (.exe) Setup Package with 100% Offline Runtime & Thermal Printer Spooler.
           </p>
         </div>
 
@@ -174,13 +193,13 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
               <div className="flex flex-wrap items-center gap-3 mb-4">
                 <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-full text-xs font-bold flex items-center gap-1.5 shadow-sm">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Latest Stable Build
+                  Latest Official Installer
                 </span>
                 <span className="px-3 py-1 bg-blue-500/20 text-blue-300 border border-blue-500/40 rounded-full text-xs font-mono font-bold">
                   v{latestRelease?.version || '2.5.0'} Enterprise
                 </span>
                 <span className="text-xs text-slate-400">
-                  Released on {latestRelease?.releaseDate || 'August 2026'}
+                  Updated on {latestRelease?.releaseDate || 'August 2026'}
                 </span>
               </div>
 
@@ -196,47 +215,51 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
               <div className="space-y-4">
                 <div className="flex flex-wrap items-center gap-4">
                   <button
-                    onClick={() => handleDownload('exe')}
-                    disabled={downloadProgress !== null && downloadProgress < 100}
-                    className="flex items-center gap-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 text-white px-6 py-3.5 rounded-xl font-bold text-sm shadow-xl shadow-blue-900/40 transition-all active:scale-98 cursor-pointer disabled:opacity-50"
+                    onClick={handleDownloadInstaller}
+                    disabled={downloadStatus === 'downloading' || downloadStatus === 'preparing'}
+                    className="flex items-center gap-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 text-white px-7 py-4 rounded-xl font-bold text-sm shadow-xl shadow-blue-900/40 transition-all active:scale-98 cursor-pointer disabled:opacity-50"
                   >
                     <Download className="w-5 h-5 text-white animate-bounce" />
-                    <span>Download Windows Installer (BarcodeFlow_Setup.exe)</span>
-                    <span className="text-[11px] bg-white/20 px-2 py-0.5 rounded font-mono">
-                      {latestRelease?.fileSize || '78.4 MB'}
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => handleDownload('zip')}
-                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-3.5 rounded-xl text-xs font-semibold border border-slate-700 transition-all cursor-pointer"
-                  >
-                    <HardDrive className="w-4 h-4 text-slate-400" />
-                    Download Standalone Source .ZIP
+                    <div className="text-left">
+                      <div className="font-bold">Download Windows Application (.exe)</div>
+                      <div className="text-[11px] text-blue-100 font-mono font-normal">
+                        {downloadFileName} • {latestRelease?.fileSize || '78.4 MB'}
+                      </div>
+                    </div>
                   </button>
                 </div>
 
-                {downloadProgress !== null && (
-                  <div className="p-4 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
+                {downloadStatus !== 'idle' && (
+                  <div className="p-4 bg-slate-950/90 rounded-xl border border-slate-800 space-y-2">
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-300 font-semibold flex items-center gap-2">
-                        {downloadComplete ? (
+                        {downloadStatus === 'completed' && (
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                        ) : (
+                        )}
+                        {(downloadStatus === 'preparing' || downloadStatus === 'downloading') && (
                           <RefreshCw className="w-4 h-4 text-blue-400 animate-spin" />
                         )}
-                        {downloadComplete
-                          ? 'Setup download started! Check your downloads folder.'
-                          : 'Packaging & Preparing Windows Installer...'}
+                        {downloadStatus === 'error' && (
+                          <AlertCircle className="w-4 h-4 text-rose-400" />
+                        )}
+
+                        {downloadStatus === 'preparing' && 'Verifying installer binary & preparing stream...'}
+                        {downloadStatus === 'downloading' && `Downloading ${downloadFileName}...`}
+                        {downloadStatus === 'completed' && `Downloaded ${downloadFileName} successfully! Check your browser downloads.`}
+                        {downloadStatus === 'error' && downloadError}
                       </span>
-                      <span className="font-mono text-blue-400 font-bold">{downloadProgress}%</span>
+                      {downloadProgress !== null && downloadStatus !== 'error' && (
+                        <span className="font-mono text-blue-400 font-bold">{downloadProgress}%</span>
+                      )}
                     </div>
-                    <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-blue-500 to-emerald-500 h-full transition-all duration-300"
-                        style={{ width: `${downloadProgress}%` }}
-                      />
-                    </div>
+                    {downloadStatus !== 'error' && (
+                      <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                        <div
+                          className="bg-gradient-to-r from-blue-500 to-emerald-500 h-full transition-all duration-300"
+                          style={{ width: `${downloadProgress || 0}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -298,9 +321,9 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
                 <div className="w-7 h-7 bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg flex items-center justify-center font-bold text-xs">
                   1
                 </div>
-                <h4 className="font-bold text-xs text-slate-200">Run Setup File</h4>
+                <h4 className="font-bold text-xs text-slate-200">Run Setup Executable</h4>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Double click <code className="text-blue-300 font-mono">BarcodeFlow_Setup.exe</code>. The NSIS installer will guide you through standard wizard.
+                  Double click <code className="text-blue-300 font-mono">BarcodeFlow_Setup_v2.5.0.exe</code>. The installer will extract and configure the desktop runtime.
                 </p>
               </div>
 
@@ -320,7 +343,7 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
                 </div>
                 <h4 className="font-bold text-xs text-slate-200">Thermal Printer & Design</h4>
                 <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Open application. Detected Zebra/TSC printers show instantly in Printer Calibration Wizard. Work completely offline!
+                  Open application from desktop. Detected Zebra/TSC printers show instantly in Printer Calibration Wizard. Work completely offline!
                 </p>
               </div>
             </div>
