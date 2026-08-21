@@ -10,16 +10,9 @@ import {
   Printer,
   History,
   FileCode,
-  ArrowRight,
-  ExternalLink,
-  ChevronDown,
-  ChevronUp,
   RefreshCw,
   Sparkles,
-  Info,
   Server,
-  Layers,
-  FileText,
   Key,
   Flame,
   AlertCircle
@@ -41,9 +34,12 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [latestRelease, setLatestRelease] = useState<any>(null);
   const [releases, setReleases] = useState<any[]>([]);
-  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
-  const [downloadStatus, setDownloadStatus] = useState<'idle' | 'preparing' | 'downloading' | 'completed' | 'error'>('idle');
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [downloadStatus, setDownloadStatus] = useState<
+    'idle' | 'preparing' | 'connecting' | 'downloading' | 'completed' | 'error'
+  >('idle');
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadedBytesText, setDownloadedBytesText] = useState<string>('');
   const [downloadFileName, setDownloadFileName] = useState<string>('BarcodeFlow_Setup_v2.5.0.exe');
   const [showAdminUpload, setShowAdminUpload] = useState(false);
   const [newVersion, setNewVersion] = useState('');
@@ -75,44 +71,97 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
   }, []);
 
   /**
-   * Real, robust binary installer download.
-   * Directly queries the authenticated backend download stream without source code zip.
+   * Real, zero-simulation binary stream download with actual chunk counting.
+   * Never shows 100% or "Download Completed" if the server returns 404 or fails.
    */
   const handleDownloadInstaller = async () => {
     try {
-      setDownloadStatus('preparing');
+      setDownloadStatus('connecting');
       setDownloadError(null);
-      setDownloadProgress(15);
+      setDownloadProgress(5);
+      setDownloadedBytesText('Initiating secure handshake...');
 
       const targetVersion = latestRelease?.version || '2.5.0';
       const downloadUrl = `/api/software/download?v=${targetVersion}`;
 
-      // Simulate step progress before stream trigger
-      setTimeout(() => {
-        setDownloadProgress(45);
-        setDownloadStatus('downloading');
-      }, 400);
+      const response = await fetch(downloadUrl);
 
-      setTimeout(() => {
-        setDownloadProgress(85);
-      }, 800);
+      // Verify server response before proceeding
+      if (!response.ok) {
+        let errorMsg = `Server error (HTTP ${response.status})`;
+        try {
+          const errData = await response.json();
+          if (errData && errData.message) {
+            errorMsg = errData.message;
+          }
+        } catch {
+          errorMsg = `Installer binary file not available (HTTP ${response.status}). Please restart server or contact Administrator.`;
+        }
+        setDownloadStatus('error');
+        setDownloadError(errorMsg);
+        setDownloadProgress(0);
+        return;
+      }
 
-      setTimeout(() => {
-        setDownloadProgress(100);
-        setDownloadStatus('completed');
+      const contentLengthHeader = response.headers.get('content-length');
+      const totalBytes = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
 
-        // Direct browser attachment download trigger
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.setAttribute('download', `BarcodeFlow_Setup_v${targetVersion}.exe`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }, 1200);
+      if (!response.body) {
+        throw new Error('ReadableStream not supported by client browser.');
+      }
+
+      setDownloadStatus('downloading');
+
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let receivedBytes = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (value) {
+          chunks.push(value);
+          receivedBytes += value.length;
+
+          if (totalBytes > 0) {
+            const percent = Math.min(99, Math.round((receivedBytes / totalBytes) * 100));
+            setDownloadProgress(percent);
+            setDownloadedBytesText(
+              `${(receivedBytes / (1024 * 1024)).toFixed(1)} MB / ${(totalBytes / (1024 * 1024)).toFixed(1)} MB (${percent}%)`
+            );
+          } else {
+            setDownloadProgress(50);
+            setDownloadedBytesText(`${(receivedBytes / (1024 * 1024)).toFixed(1)} MB received`);
+          }
+        }
+      }
+
+      // Concatenate received chunks into a single executable binary Blob
+      const blob = new Blob(chunks, { type: 'application/vnd.microsoft.portable-executable' });
+      const blobUrl = window.URL.createObjectURL(blob);
+
+      // Trigger standard browser file save
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.setAttribute('download', downloadFileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      window.URL.revokeObjectURL(blobUrl);
+
+      // ONLY mark completed after all chunks are verified and saved
+      setDownloadProgress(100);
+      setDownloadStatus('completed');
+      setDownloadedBytesText(
+        `Successfully downloaded ${(blob.size / (1024 * 1024)).toFixed(1)} MB directly to your system.`
+      );
     } catch (err: any) {
-      console.error('Download error:', err);
+      console.error('Download stream error:', err);
       setDownloadStatus('error');
-      setDownloadError(err.message || 'Installer currently unavailable. Please contact Administrator.');
+      setDownloadProgress(0);
+      setDownloadError(err.message || 'Download failed. Installer currently unavailable on server.');
     }
   };
 
@@ -216,7 +265,7 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
                 <div className="flex flex-wrap items-center gap-4">
                   <button
                     onClick={handleDownloadInstaller}
-                    disabled={downloadStatus === 'downloading' || downloadStatus === 'preparing'}
+                    disabled={downloadStatus === 'downloading' || downloadStatus === 'connecting'}
                     className="flex items-center gap-3 bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-600 hover:from-blue-500 hover:to-emerald-500 text-white px-7 py-4 rounded-xl font-bold text-sm shadow-xl shadow-blue-900/40 transition-all active:scale-98 cursor-pointer disabled:opacity-50"
                   >
                     <Download className="w-5 h-5 text-white animate-bounce" />
@@ -236,27 +285,32 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
                         {downloadStatus === 'completed' && (
                           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                         )}
-                        {(downloadStatus === 'preparing' || downloadStatus === 'downloading') && (
+                        {(downloadStatus === 'connecting' || downloadStatus === 'downloading') && (
                           <RefreshCw className="w-4 h-4 text-blue-400 animate-spin" />
                         )}
                         {downloadStatus === 'error' && (
                           <AlertCircle className="w-4 h-4 text-rose-400" />
                         )}
 
-                        {downloadStatus === 'preparing' && 'Verifying installer binary & preparing stream...'}
+                        {downloadStatus === 'connecting' && 'Connecting to server & verifying installer...'}
                         {downloadStatus === 'downloading' && `Downloading ${downloadFileName}...`}
-                        {downloadStatus === 'completed' && `Downloaded ${downloadFileName} successfully! Check your browser downloads.`}
-                        {downloadStatus === 'error' && downloadError}
+                        {downloadStatus === 'completed' && 'Download Completed! Setup file saved in your downloads folder.'}
+                        {downloadStatus === 'error' && `Download Failed: ${downloadError}`}
                       </span>
-                      {downloadProgress !== null && downloadStatus !== 'error' && (
+                      {downloadStatus === 'downloading' && (
                         <span className="font-mono text-blue-400 font-bold">{downloadProgress}%</span>
                       )}
                     </div>
+
+                    {downloadedBytesText && downloadStatus !== 'error' && (
+                      <div className="text-[11px] text-slate-400 font-mono">{downloadedBytesText}</div>
+                    )}
+
                     {downloadStatus !== 'error' && (
                       <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
                         <div
                           className="bg-gradient-to-r from-blue-500 to-emerald-500 h-full transition-all duration-300"
-                          style={{ width: `${downloadProgress || 0}%` }}
+                          style={{ width: `${downloadProgress}%` }}
                         />
                       </div>
                     )}
