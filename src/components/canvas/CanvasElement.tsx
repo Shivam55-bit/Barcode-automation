@@ -56,17 +56,20 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
   if (!element.visible) return null;
 
   const evaluatedContent = evaluateElementData(element, { record: recordData });
-
-  const isNonEditable = element.locked || element.isEditable === false;
+  const isLocked = !!element.locked;
+  const isEditable = !isLocked && (element.editable !== undefined ? element.editable : element.isEditable !== undefined ? element.isEditable : true);
+  const allowMove = isEditable && element.allowMove !== false;
+  const allowResize = isEditable && element.allowResize !== false;
+  const allowRotate = isEditable && element.allowRotate !== false;
 
   return (
     <div
       id={`canvas-el-${element.id}`}
       className={`absolute select-none transition-shadow duration-75 ${
-        isNonEditable ? 'cursor-not-allowed ring-1 ring-amber-400/50' : 'cursor-move'
+        !allowMove ? (isLocked ? 'cursor-not-allowed ring-1 ring-amber-400/50' : 'cursor-default') : 'cursor-move'
       } ${
         isSelected
-          ? isNonEditable ? 'ring-2 ring-amber-500 shadow-xs' : 'ring-1 ring-[#16a34a] shadow-xs'
+          ? isLocked ? 'ring-2 ring-amber-500 shadow-xs' : 'ring-1 ring-[#16a34a] shadow-xs'
           : 'hover:ring-1 hover:ring-[#93c5fd]'
       }`}
       style={{
@@ -82,7 +85,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
       onMouseDown={(e) => {
         if (e.button === 0) {
           onSelect(e, element);
-          if (!isNonEditable) {
+          if (allowMove) {
             onStartDrag(e, element);
           }
         }
@@ -277,17 +280,17 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
       )}
 
       {/* Lock Indicator */}
-      {isNonEditable && (
+      {isLocked && (
         <div
-          title="Non-Editable / Locked Element"
-          className="absolute top-1 right-1 bg-amber-500/90 text-white p-0.5 rounded shadow-2xs z-30 flex items-center justify-center"
+          title="Field Locked (Fixed Layout / Immutable)"
+          className="absolute top-1 right-1 bg-amber-500 text-white p-0.5 rounded shadow-xs z-30 flex items-center justify-center ring-1 ring-white/50"
         >
           <Lock className="w-3 h-3" />
         </div>
       )}
 
-      {/* Resize & Rotate Handles if selected and editable */}
-      {isSelected && !isNonEditable && (
+      {/* Resize Handles if selected and allowed */}
+      {isSelected && allowResize && (
         <>
           {/* Top-Left */}
           <div
@@ -353,19 +356,21 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
               onStartResize(e, 'bottom-right', element);
             }}
           />
-
-          {/* Rotate Handle */}
-          <div
-            className="absolute -top-7 left-1/2 -translate-x-1/2 flex flex-col items-center cursor-grab active:cursor-grabbing z-20"
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              onStartRotate(e, element);
-            }}
-          >
-            <div className="w-3.5 h-3.5 bg-emerald-600 rounded-full border-2 border-white shadow-xs" />
-            <div className="w-0.5 h-3.5 bg-emerald-600" />
-          </div>
         </>
+      )}
+
+      {/* Rotate Handle if selected and allowed */}
+      {isSelected && allowRotate && (
+        <div
+          className="absolute -top-7 left-1/2 -translate-x-1/2 flex flex-col items-center cursor-grab active:cursor-grabbing z-20"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            onStartRotate(e, element);
+          }}
+        >
+          <div className="w-3.5 h-3.5 bg-emerald-600 rounded-full border-2 border-white shadow-xs" />
+          <div className="w-0.5 h-3.5 bg-emerald-600" />
+        </div>
       )}
     </div>
   );

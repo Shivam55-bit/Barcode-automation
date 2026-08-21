@@ -53,6 +53,7 @@ import { RecordNavigationBar } from './components/canvas/RecordNavigationBar';
 import { exportLabelsToPDF } from './services/pdfExportService';
 import { generateZPL } from './services/zplEngine';
 import { calculateGS1CheckDigit } from './services/gs1Engine';
+import { createTemplateSnapshot, calculateShortChecksum } from './services/snapshotService';
 import { apiService } from './services/apiService';
 import { ZoomIn, ZoomOut, Maximize2, ShieldCheck, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
 
@@ -222,11 +223,48 @@ export default function App() {
     apiService.auditLogs.log(newEntry).catch((err) => console.warn('Audit log backend sync error:', err));
   };
 
-  // Update Template Properties
+  // Helper to bump minor version (e.g., 1.0 -> 1.1)
+  const getNextDraftVersion = (ver: string = '1.0'): string => {
+    const parts = ver.split('.');
+    if (parts.length >= 2) {
+      const major = parseInt(parts[0], 10) || 1;
+      const minor = parseInt(parts[1], 10) || 0;
+      return `${major}.${minor + 1}`;
+    }
+    return `${ver}.1`;
+  };
+
+  // Update Template Properties with Version Freeze Auto-Branching
   const updateTemplate = useCallback(
     (updates: Partial<LabelTemplate>) => {
       setTemplates((prev) =>
-        prev.map((t) => (t.id === currentTemplateId ? { ...t, ...updates, updatedAt: new Date().toISOString() } : t))
+        prev.map((t) => {
+          if (t.id !== currentTemplateId) return t;
+
+          // If template is frozen in approval or approved and layout/elements are modified:
+          const isFrozen = t.status === 'pending_level_1' || t.status === 'pending_level_2' || t.status === 'approved' || t.status === 'submitted';
+          const isModifyingContent = updates.elements !== undefined || updates.dimensions !== undefined;
+
+          if (isFrozen && isModifyingContent && updates.status === undefined) {
+            const nextVer = getNextDraftVersion(t.version);
+            const branched: LabelTemplate = {
+              ...t,
+              ...updates,
+              version: nextVer,
+              status: 'draft',
+              updatedAt: new Date().toISOString(),
+              tags: Array.from(new Set([...(t.tags || []), 'Draft Revision'])),
+            };
+            showToast(`Auto-created editable Draft v${nextVer} (Frozen v${t.version} remains in approval pipeline)`, 'info');
+            logAction('EDIT_TEMPLATE', `Auto-branched template "${t.name}" to Draft v${nextVer} due to designer modification during active approval.`);
+            apiService.templates.save(branched).catch((err) => console.warn('API sync draft save error:', err));
+            return branched;
+          }
+
+          const updated = { ...t, ...updates, updatedAt: new Date().toISOString() };
+          apiService.templates.save(updated).catch((err) => console.warn('API sync save error:', err));
+          return updated;
+        })
       );
     },
     [currentTemplateId]
@@ -1124,6 +1162,7 @@ export default function App() {
           printJobs={printJobs}
           auditLogs={auditLogs}
           currentUser={currentUser}
+          allUsers={INITIAL_USERS}
           onOpenTemplate={(id) => {
             setCurrentTemplateId(id);
             setActiveView('designer');
@@ -1135,6 +1174,12 @@ export default function App() {
           }}
           onOpenPrintCenter={() => setIsPrintDialogOpen(true)}
           onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
+          onNavigateToWorkflow={() => setActiveView('workflow')}
+          onNavigateToViewer={() => setActiveView('viewer')}
+          onSwitchUser={(user) => {
+            setCurrentUser(user);
+            showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
+          }}
           onLogout={handleLogout}
           onCreateNewTemplate={() => {
             handleNewTemplate();
@@ -1165,107 +1210,144 @@ export default function App() {
         </div>
       )}
 
-      {/* Global Top Menu Bar */}
-      <MenuBar
-        onNew={handleNewTemplate}
-        onOpen={() => setActiveView('dashboard')}
-        onSave={handleSaveTemplate}
-        onSaveAs={async () => {
-          const name = prompt('Enter new template name:', `${currentTemplate.name} (Copy)`);
-          if (name) {
-            const copy: LabelTemplate = {
-              ...currentTemplate,
-              id: `tmpl-${Date.now()}`,
-              name,
-              status: 'draft',
-              tags: Array.from(new Set([...(currentTemplate.tags || []), 'Draft'])),
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              createdBy: currentUser.name,
-            };
-            setTemplates((prev) => [copy, ...prev]);
-            setCurrentTemplateId(copy.id);
-            showToast(`Saved as "${name}" in My Drafts via API!`, 'success');
-            logAction('CREATE_TEMPLATE', `Saved template as "${name}" in My Drafts`);
-            try {
-              await apiService.templates.create(copy);
-            } catch (err) {
-              console.warn('API save error in onSaveAs:', err);
-            }
-          }
-        }}
-        onExportPDF={handleExportPDF}
-        onExportZPL={() => setIsZplExportOpen(true)}
-        onExportJSON={handleExportJSON}
-        onImportJSON={handleImportJSON}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        canUndo={historyIndex > 0}
-        canRedo={historyIndex < history.length - 1}
-        onCut={handleCut}
-        onCopy={handleCopy}
-        onPaste={handlePaste}
-        onDelete={handleDeleteSelected}
-        onSelectAll={handleSelectAll}
-        onDuplicate={handleDuplicateSelected}
-        onZoomIn={() => setViewport((p) => ({ ...p, zoom: Math.min(p.zoom + 0.25, 4.0) }))}
-        onZoomOut={() => setViewport((p) => ({ ...p, zoom: Math.max(p.zoom - 0.25, 0.25) }))}
-        onZoomFit={() => setViewport((p) => ({ ...p, zoom: 1.0, panX: 40, panY: 40 }))}
-        onZoom100={() => setViewport((p) => ({ ...p, zoom: 1.0 }))}
-        onToggleGrid={() => setViewport((p) => ({ ...p, showGrid: !p.showGrid }))}
-        onToggleRulers={() => setViewport((p) => ({ ...p, showRulers: !p.showRulers }))}
-        onToggleGuides={() => setViewport((p) => ({ ...p, showGuides: !p.showGuides }))}
-        onToggleSnap={() => setViewport((p) => ({ ...p, snapToGrid: !p.snapToGrid }))}
-        showGrid={viewport.showGrid}
-        showRulers={viewport.showRulers}
-        showGuides={viewport.showGuides}
-        snapToGrid={viewport.snapToGrid}
-        onInsertText={handleInsertText}
-        onInsertBarcode={handleInsertBarcode}
-        onInsertQR={handleInsertQR}
-        onInsertDataMatrix={handleInsertDataMatrix}
-        onInsertShape={handleInsertShape}
-        onInsertImage={handleInsertImage}
-        onInsertTable={handleInsertTable}
-        onInsertGS1Block={() => setIsGs1WizardOpen(true)}
-        onBringToFront={handleBringToFront}
-        onSendToBack={handleSendToBack}
-        onGroup={() => showToast('Elements grouped', 'info')}
-        onUngroup={() => showToast('Elements ungrouped', 'info')}
-        onLockToggle={handleLockToggle}
-        onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
-        onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
-        onOpenPrintDialog={() => setIsPrintDialogOpen(true)}
-        onOpenBatchPrint={() => setIsPrintDialogOpen(true)}
-        onOpenApproval={() => setIsApprovalModalOpen(true)}
-        onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
-        onOpenAiAssistant={() => setIsAiAssistantOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenShortcuts={() => setIsShortcutsOpen(true)}
-        onOpenDataImport={() => setIsDatabaseConnectionModalOpen(true)}
-        onOpenSerialNumberWizard={() => setIsSerialNumberWizardOpen(true)}
-        onOpenDateTimeWizard={() => setIsDateTimeWizardOpen(true)}
-        onOpenVersionHistory={() => setIsVersionHistoryModalOpen(true)}
-        onToggleValidationInspector={() => setIsValidationInspectorOpen((p) => !p)}
-        onOpenGs1Wizard={() => setIsGs1WizardOpen(true)}
-        onPageSetup={() => setIsPageSetupOpen(true)}
-        onOpenNamedDataSources={() => setIsNamedDataSourcesOpen(true)}
-        onOpenDocumentScripts={() => setIsDocumentScriptsOpen(true)}
-        activeView={activeView}
-        setActiveView={setActiveView}
-        templateName={currentTemplate.name}
-        currentUser={currentUser}
-        allUsers={INITIAL_USERS}
-        onSwitchUser={(user) => {
-          setCurrentUser(user);
-          showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
-        }}
-        onLogout={handleLogout}
-      />
-
-      {/* Main Content Area */}
+      {/* Designer Studio View (MenuBar + Toolbars + Canvas) */}
       {activeView === 'designer' && (
-        <div className="flex-1 flex flex-col overflow-hidden bg-[#9fbddb]">
+        <>
+          <MenuBar
+            onNew={handleNewTemplate}
+            onOpen={() => setActiveView('dashboard')}
+            onSave={handleSaveTemplate}
+            onSaveAs={async () => {
+              const name = prompt('Enter new template name:', `${currentTemplate.name} (Copy)`);
+              if (name) {
+                const copy: LabelTemplate = {
+                  ...currentTemplate,
+                  id: `tmpl-${Date.now()}`,
+                  name,
+                  status: 'draft',
+                  tags: Array.from(new Set([...(currentTemplate.tags || []), 'Draft'])),
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                  createdBy: currentUser.name,
+                };
+                setTemplates((prev) => [copy, ...prev]);
+                setCurrentTemplateId(copy.id);
+                showToast(`Saved as "${name}" in My Drafts via API!`, 'success');
+                logAction('CREATE_TEMPLATE', `Saved template as "${name}" in My Drafts`);
+                try {
+                  await apiService.templates.create(copy);
+                } catch (err) {
+                  console.warn('API save error in onSaveAs:', err);
+                }
+              }
+            }}
+            onExportPDF={handleExportPDF}
+            onExportZPL={() => setIsZplExportOpen(true)}
+            onExportJSON={handleExportJSON}
+            onImportJSON={handleImportJSON}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            canUndo={historyIndex > 0}
+            canRedo={historyIndex < history.length - 1}
+            onCut={handleCut}
+            onCopy={handleCopy}
+            onPaste={handlePaste}
+            onDelete={handleDeleteSelected}
+            onSelectAll={handleSelectAll}
+            onDuplicate={handleDuplicateSelected}
+            onZoomIn={() => setViewport((p) => ({ ...p, zoom: Math.min(p.zoom + 0.25, 4.0) }))}
+            onZoomOut={() => setViewport((p) => ({ ...p, zoom: Math.max(p.zoom - 0.25, 0.25) }))}
+            onZoomFit={() => setViewport((p) => ({ ...p, zoom: 1.0, panX: 40, panY: 40 }))}
+            onZoom100={() => setViewport((p) => ({ ...p, zoom: 1.0 }))}
+            onToggleGrid={() => setViewport((p) => ({ ...p, showGrid: !p.showGrid }))}
+            onToggleRulers={() => setViewport((p) => ({ ...p, showRulers: !p.showRulers }))}
+            onToggleGuides={() => setViewport((p) => ({ ...p, showGuides: !p.showGuides }))}
+            onToggleSnap={() => setViewport((p) => ({ ...p, snapToGrid: !p.snapToGrid }))}
+            showGrid={viewport.showGrid}
+            showRulers={viewport.showRulers}
+            showGuides={viewport.showGuides}
+            snapToGrid={viewport.snapToGrid}
+            onInsertText={handleInsertText}
+            onInsertBarcode={handleInsertBarcode}
+            onInsertQR={handleInsertQR}
+            onInsertDataMatrix={handleInsertDataMatrix}
+            onInsertShape={handleInsertShape}
+            onInsertImage={handleInsertImage}
+            onInsertTable={handleInsertTable}
+            onInsertGS1Block={() => setIsGs1WizardOpen(true)}
+            onBringToFront={handleBringToFront}
+            onSendToBack={handleSendToBack}
+            onGroup={() => showToast('Elements grouped', 'info')}
+            onUngroup={() => showToast('Elements ungrouped', 'info')}
+            onLockToggle={handleLockToggle}
+            onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
+            onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
+            onOpenPrintDialog={() => setIsPrintDialogOpen(true)}
+            onOpenBatchPrint={() => setIsPrintDialogOpen(true)}
+            onOpenApproval={() => setIsApprovalModalOpen(true)}
+            onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
+            onOpenAiAssistant={() => setIsAiAssistantOpen(true)}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenShortcuts={() => setIsShortcutsOpen(true)}
+            onOpenDataImport={() => setIsDatabaseConnectionModalOpen(true)}
+            onOpenSerialNumberWizard={() => setIsSerialNumberWizardOpen(true)}
+            onOpenDateTimeWizard={() => setIsDateTimeWizardOpen(true)}
+            onOpenVersionHistory={() => setIsVersionHistoryModalOpen(true)}
+            onToggleValidationInspector={() => setIsValidationInspectorOpen((p) => !p)}
+            onOpenGs1Wizard={() => setIsGs1WizardOpen(true)}
+            onPageSetup={() => setIsPageSetupOpen(true)}
+            onOpenNamedDataSources={() => setIsNamedDataSourcesOpen(true)}
+            onOpenDocumentScripts={() => setIsDocumentScriptsOpen(true)}
+            activeView={activeView}
+            setActiveView={setActiveView}
+            templateName={currentTemplate.name}
+            currentUser={currentUser}
+            allUsers={INITIAL_USERS}
+            onSwitchUser={(user) => {
+              setCurrentUser(user);
+              showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
+            }}
+            onLogout={handleLogout}
+            onSubmitForApproval={async () => {
+              if (currentTemplate.status !== 'draft') {
+                showToast(`Template is already "${currentTemplate.status}" — only drafts can be submitted.`, 'info');
+                return;
+              }
+              try {
+                const snapshot = await createTemplateSnapshot(currentTemplate, currentUser.name, 'Submitted from Designer Studio');
+                await apiService.templates.submit({
+                  templateId: currentTemplate.id,
+                  submittedBy: currentUser.name,
+                  comments: 'Submitted from Designer Studio toolbar.',
+                  snapshot,
+                });
+                setTemplates((prev) =>
+                  prev.map((t) =>
+                    t.id === currentTemplate.id
+                      ? { ...t, status: 'pending_level_1', updatedAt: new Date().toISOString() }
+                      : t
+                  )
+                );
+                logAction('SUBMIT_APPROVAL', `Submitted template "${currentTemplate.name}" (v${currentTemplate.version}) for QA Review from Designer.`);
+                showToast(`Version ${currentTemplate.version} frozen & submitted for QA Approval! Checksum: ${snapshot.checksum}`, 'success');
+                setActiveView('workflow');
+              } catch (err) {
+                console.warn('Submit approval error:', err);
+                setTemplates((prev) =>
+                  prev.map((t) =>
+                    t.id === currentTemplate.id
+                      ? { ...t, status: 'pending_level_1', updatedAt: new Date().toISOString() }
+                      : t
+                  )
+                );
+                logAction('SUBMIT_APPROVAL', `Submitted template "${currentTemplate.name}" for QA Review (offline mode).`);
+                showToast(`Template submitted for approval (offline mode).`, 'success');
+                setActiveView('workflow');
+              }
+            }}
+          />
+
+          <div className="flex-1 flex flex-col overflow-hidden bg-[#9fbddb]">
           {/* BarTender Dual-Row Standard & Formatting Toolbar */}
           <ObjectToolbar
             activeTool={activeTool}
@@ -1527,6 +1609,7 @@ export default function App() {
             )}
           </div>
         </div>
+        </>
       )}
 
       {/* Alternative Enterprise Views */}
@@ -1584,32 +1667,136 @@ export default function App() {
         <WorkflowView
           templates={templates}
           currentUser={currentUser}
+          allUsers={INITIAL_USERS}
+          onNavigateToDashboard={() => setActiveView('dashboard')}
+          onSwitchUser={(user) => {
+            setCurrentUser(user);
+            showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
+          }}
+          onLogout={handleLogout}
           onOpenTemplateInDesigner={(id) => {
             setCurrentTemplateId(id);
             setActiveView('designer');
           }}
-          onUpdateTemplateStatus={async (templateId, status, comment, eSignature) => {
-            setTemplates((prev) =>
-              prev.map((t) =>
-                t.id === templateId
-                  ? {
-                      ...t,
-                      status,
-                      approvedBy: (status === 'approved' || status === 'published') ? eSignature || currentUser.name : t.approvedBy,
-                      approvedAt: (status === 'approved' || status === 'published') ? new Date().toISOString() : t.approvedAt,
-                      updatedAt: new Date().toISOString(),
-                    }
-                  : t
-              )
-            );
-            logAction('APPROVE_TEMPLATE', `Status of template updated to ${status.toUpperCase()} (${comment})`);
-            showToast(`Template marked as ${status.toUpperCase()} (synced with API)`, 'success');
+          onUpdateTemplateStatus={async (templateId, status, comment, eSignature, annotations) => {
+            const targetTmpl = templates.find((t) => t.id === templateId) || currentTemplate;
 
-            try {
-              await apiService.templates.updateStatus(templateId, status, comment, currentUser.name, eSignature);
-            } catch (err) {
-              console.warn('API error updating status:', err);
+            // 1. SUBMIT FOR APPROVAL -> FREEZE VERSION & GENERATE SNAPSHOT
+            if (status === 'pending_level_1' || status === 'submitted') {
+              try {
+                const snapshot = await createTemplateSnapshot(targetTmpl, currentUser.name, comment);
+                const submitRes = await apiService.templates.submit({
+                  templateId,
+                  submittedBy: currentUser.name,
+                  comments: comment,
+                  snapshot,
+                });
+
+                setTemplates((prev) =>
+                  prev.map((t) =>
+                    t.id === templateId
+                      ? {
+                          ...t,
+                          status: 'pending_level_1',
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : t
+                  )
+                );
+                logAction('SUBMIT_APPROVAL', `Submitted template "${targetTmpl.name}" (v${targetTmpl.version}) for QA Review. Version frozen.`);
+                showToast(`Version ${targetTmpl.version} frozen & submitted for QA Approval! Checksum: ${snapshot.checksum}`, 'success');
+                return;
+              } catch (err) {
+                console.warn('API error submitting for approval:', err);
+              }
             }
+
+            // 2. APPROVE LEVEL 1 OR LEVEL 2
+            if (status === 'pending_level_2' || status === 'approved' || status === 'published') {
+              const level = status === 'pending_level_2' ? 1 : 2;
+              try {
+                await apiService.templates.approve({
+                  templateId,
+                  version: targetTmpl.version,
+                  level,
+                  reviewerName: currentUser.name,
+                  reviewerEmail: currentUser.email,
+                  digitalSignature: eSignature || `${currentUser.name} (${currentUser.role})`,
+                  comment,
+                  isFinal: status === 'approved' || status === 'published',
+                });
+
+                setTemplates((prev) =>
+                  prev.map((t) =>
+                    t.id === templateId
+                      ? {
+                          ...t,
+                          status,
+                          approvedBy: eSignature || currentUser.name,
+                          approvedAt: new Date().toISOString(),
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : t
+                  )
+                );
+                logAction('APPROVE_TEMPLATE', `Approved template "${targetTmpl.name}" at Level ${level}. Signed by ${currentUser.name}.`);
+                showToast(`Successfully e-Signed and approved template at Level ${level}!`, 'success');
+                return;
+              } catch (err) {
+                console.warn('API error approving template:', err);
+              }
+            }
+
+            // 3. REJECT OR REQUEST CHANGES
+            if (status === 'rejected') {
+              try {
+                if (annotations && annotations.length > 0) {
+                  await apiService.templates.requestChange({
+                    templateId,
+                    version: targetTmpl.version,
+                    reviewerName: currentUser.name,
+                    comment,
+                    annotations,
+                  });
+                  logAction('REQUEST_CHANGE', `Requested changes for "${targetTmpl.name}" with ${annotations.length} visual annotations.`);
+                  showToast(`Changes requested with ${annotations.length} visual annotations attached. Returned to Draft.`, 'info');
+                } else {
+                  await apiService.templates.reject({
+                    templateId,
+                    version: targetTmpl.version,
+                    reviewerName: currentUser.name,
+                    reason: comment,
+                  });
+                  logAction('REJECT_TEMPLATE', `Rejected template "${targetTmpl.name}". Reason: ${comment}`);
+                  showToast(`Template submission rejected and returned to draft for revision.`, 'info');
+                }
+
+                setTemplates((prev) =>
+                  prev.map((t) =>
+                    t.id === templateId
+                      ? {
+                          ...t,
+                          status: 'draft',
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : t
+                  )
+                );
+                return;
+              } catch (err) {
+                console.warn('API error rejecting template:', err);
+              }
+            }
+
+            // Fallback status update
+            setTemplates((prev) =>
+              prev.map((t) => (t.id === templateId ? { ...t, status, updatedAt: new Date().toISOString() } : t))
+            );
+          }}
+          onRollbackTemplate={(rolledBackTmpl) => {
+            updateTemplate(rolledBackTmpl);
+            showToast(`Rolled back active template to v${rolledBackTmpl.version}`, 'success');
+            logAction('ROLLBACK_VERSION', `Rolled back template "${rolledBackTmpl.name}" to version ${rolledBackTmpl.version}`);
           }}
           onGenerateBatchJob={async (job) => {
             setBatchJobs((prev) => [job, ...prev]);
@@ -1633,6 +1820,15 @@ export default function App() {
           templates={templates}
           printers={printers}
           currentUserName={currentUser.name}
+          currentUser={currentUser}
+          allUsers={INITIAL_USERS}
+          onNavigateToDashboard={() => setActiveView('dashboard')}
+          onNavigateToWorkflow={() => setActiveView('workflow')}
+          onSwitchUser={(user) => {
+            setCurrentUser(user);
+            showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
+          }}
+          onLogout={handleLogout}
           onOpenDesigner={(tmplId) => {
             setCurrentTemplateId(tmplId);
             setActiveView('designer');

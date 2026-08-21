@@ -19,16 +19,19 @@ import { LabelTemplate, BarcodeBatchJob, BarcodeBatchItem } from '../../types';
 
 interface GenerateBarcodeModalProps {
   template: LabelTemplate;
-  onGenerateAndSend: (job: BarcodeBatchJob) => void;
+  onGenerateAndSend?: (job: BarcodeBatchJob) => void;
+  onGenerateSuccess?: (job: BarcodeBatchJob) => void;
   onClose: () => void;
-  currentUserName: string;
+  currentUserName?: string;
+  isOpen?: boolean;
 }
 
 export const GenerateBarcodeModal: React.FC<GenerateBarcodeModalProps> = ({
   template,
   onGenerateAndSend,
+  onGenerateSuccess,
   onClose,
-  currentUserName,
+  currentUserName = 'Administrator',
 }) => {
   // Form fields according to enterprise requirements
   const [productName, setProductName] = useState(template.name.replace('.btw', ''));
@@ -94,7 +97,12 @@ export const GenerateBarcodeModal: React.FC<GenerateBarcodeModalProps> = ({
       sentToViewerAt: autoSendToViewer ? new Date().toLocaleString() : undefined,
     };
 
-    onGenerateAndSend(newJob);
+    if (onGenerateAndSend) {
+      onGenerateAndSend(newJob);
+    }
+    if (onGenerateSuccess) {
+      onGenerateSuccess(newJob);
+    }
     onClose();
   };
 

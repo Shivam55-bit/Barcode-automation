@@ -25,28 +25,18 @@ export const LoginView: React.FC<LoginViewProps> = ({
   onLoginSuccess,
   initialUsers = INITIAL_USERS,
 }) => {
-  // Only keep the Designer profile and hide all other roles
+  // Provide all enterprise workflow roles
   const safeUsers = Array.isArray(initialUsers) && initialUsers.length > 0 ? initialUsers : INITIAL_USERS;
-  const designerUsers = safeUsers.filter(
-    (u) => u.role === 'Designer' || u.role === 'Label Designer' || u.id === 'usr-designer'
-  );
-  const activeDesigner = designerUsers[0] || safeUsers[0] || {
-    id: 'usr-designer',
-    name: 'Shivam',
-    email: 'shivam@gmail.com',
-    role: 'Designer',
-    department: 'Label Management',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces',
-  };
+  const activeInitial = safeUsers[0];
 
-  const [selectedRole, setSelectedRole] = useState<string>(activeDesigner?.id || 'usr-designer');
-  const [customEmail, setCustomEmail] = useState<string>(activeDesigner?.email || 'shivam@gmail.com');
+  const [selectedRole, setSelectedRole] = useState<string>(activeInitial?.id || 'usr-designer');
+  const [customEmail, setCustomEmail] = useState<string>(activeInitial?.email || 'shivam@gmail.com');
   const [password, setPassword] = useState<string>('••••••••');
   const [rememberMe, setRememberMe] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const selectedUser = activeDesigner;
+  const selectedUser = safeUsers.find((u) => u.id === selectedRole) || activeInitial;
 
   const handleRoleSelect = (user: UserProfile) => {
     setSelectedRole(user.id);
@@ -117,32 +107,46 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
 
             {/* Quick Role Selector Cards - Designer Profile Only */}
-            <div className="space-y-2">
-              {designerUsers.map((user) => {
+            <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+              {safeUsers.map((user) => {
                 const isSelected = selectedRole === user.id;
                 return (
                   <div
                     key={user.id}
                     onClick={() => handleRoleSelect(user)}
-                    className="p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between bg-blue-600/20 border-blue-500 text-white shadow-md"
+                    className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
+                      isSelected
+                        ? 'bg-blue-600/20 border-blue-500 text-white shadow-md ring-1 ring-blue-400/50'
+                        : 'bg-slate-950/40 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                    }`}
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2.5">
                       <img
                         src={user.avatar}
                         alt={user.name}
-                        className="w-8 h-8 rounded-full object-cover ring-2 ring-blue-400 shrink-0"
+                        className={`w-7 h-7 rounded-full object-cover shrink-0 ${
+                          isSelected ? 'ring-2 ring-blue-400' : 'opacity-60'
+                        }`}
                       />
                       <div className="text-left">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold">{user.role}</span>
-                          <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-semibold">
-                            Active
+                          <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                            {user.role}
                           </span>
+                          {isSelected && (
+                            <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1 py-0.2 rounded font-semibold">
+                              Active
+                            </span>
+                          )}
                         </div>
-                        <p className="text-[10px] text-slate-300 truncate max-w-[140px] font-medium">{user.name}</p>
+                        <p className="text-[10px] text-slate-400 truncate max-w-[140px]">{user.name}</p>
                       </div>
                     </div>
-                    <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
+                    {isSelected ? (
+                      <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
+                    ) : (
+                      <div className="w-3 h-3 rounded-full border border-slate-700 shrink-0" />
+                    )}
                   </div>
                 );
               })}

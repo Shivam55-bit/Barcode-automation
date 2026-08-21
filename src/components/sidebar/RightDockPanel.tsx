@@ -267,51 +267,132 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
           <div className="space-y-4">
             {/* 1. Geometry & Position (Common to all elements) */}
             <Section title="Geometry & Layout">
-              {/* Editable Yes / No Option as requested */}
-              <div className="grid grid-cols-2 gap-2 mb-2 pb-2 border-b border-slate-100">
-                <div>
-                  <label className="text-[10px] text-slate-700 font-bold block mb-0.5 flex items-center justify-between">
-                    <span>Editable</span>
-                    {selectedElement.isEditable === false && (
-                      <span className="text-[8.5px] bg-amber-100 text-amber-800 px-1 py-0.2 rounded font-mono font-bold">LOCKED</span>
-                    )}
-                  </label>
-                  <select
-                    value={selectedElement.isEditable === false ? 'no' : 'yes'}
-                    onChange={(e) => {
-                      const isYes = e.target.value === 'yes';
-                      updateProp({ isEditable: isYes, locked: !isYes });
-                    }}
-                    className={`w-full border rounded px-2 py-1 text-xs font-semibold outline-none transition-colors ${
-                      selectedElement.isEditable === false
-                        ? 'bg-amber-50 border-amber-400 text-amber-900 font-bold'
-                        : 'bg-white border-blue-500 text-slate-800 focus:ring-1 focus:ring-blue-500'
+              {/* Enterprise Security & Locked Fields Section */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg mb-3 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-slate-800">
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Field Lock & Security</span>
+                  </div>
+                  <span
+                    className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase border ${
+                      selectedElement.locked
+                        ? 'bg-amber-100 text-amber-800 border-amber-300'
+                        : 'bg-emerald-100 text-emerald-800 border-emerald-300'
                     }`}
                   >
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                  </select>
+                    {selectedElement.locked ? 'LOCKED / FIXED' : 'EDITABLE'}
+                  </span>
                 </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 font-medium block mb-0.5">
-                    Object Name
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">Master Lock</label>
+                    <select
+                      value={selectedElement.locked ? 'locked' : 'unlocked'}
+                      onChange={(e) => {
+                        const isLock = e.target.value === 'locked';
+                        updateProp({
+                          locked: isLock,
+                          editable: !isLock,
+                          isEditable: !isLock,
+                          allowMove: !isLock,
+                          allowResize: !isLock,
+                          allowRotate: !isLock,
+                          allowDelete: !isLock,
+                          allowContentEdit: !isLock,
+                          allowPropertyEdit: !isLock,
+                          allowVariableEdit: !isLock,
+                        });
+                      }}
+                      className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs font-semibold outline-none"
+                    >
+                      <option value="unlocked">Unlocked (Editable)</option>
+                      <option value="locked">Locked (Fixed)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">Object Name</label>
+                    <input
+                      type="text"
+                      value={selectedElement.name}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ name: e.target.value })}
+                      className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                {/* Granular Permission Toggles */}
+                <div className="pt-1.5 border-t border-slate-200 grid grid-cols-2 gap-x-2 gap-y-1.5 text-[10.5px]">
+                  <label className="flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedElement.allowMove !== false && !selectedElement.locked}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ allowMove: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-0"
+                    />
+                    <span>Allow Move</span>
                   </label>
-                  <input
-                    type="text"
-                    value={selectedElement.name}
-                    disabled={selectedElement.isEditable === false}
-                    onChange={(e) => updateProp({ name: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs outline-none disabled:bg-slate-100 disabled:text-slate-400"
-                  />
+
+                  <label className="flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedElement.allowResize !== false && !selectedElement.locked}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ allowResize: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-0"
+                    />
+                    <span>Allow Resize</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedElement.allowRotate !== false && !selectedElement.locked}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ allowRotate: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-0"
+                    />
+                    <span>Allow Rotate</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedElement.allowDelete !== false && !selectedElement.locked}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ allowDelete: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-0"
+                    />
+                    <span>Allow Delete</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedElement.allowContentEdit !== false && !selectedElement.locked}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ allowContentEdit: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-0"
+                    />
+                    <span>Content Edit</span>
+                  </label>
+
+                  <label className="flex items-center gap-1.5 text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedElement.allowVariableEdit !== false && !selectedElement.locked}
+                      disabled={selectedElement.locked}
+                      onChange={(e) => updateProp({ allowVariableEdit: e.target.checked })}
+                      className="rounded text-blue-600 focus:ring-0"
+                    />
+                    <span>Variable Edit</span>
+                  </label>
                 </div>
               </div>
-
-              {selectedElement.isEditable === false && (
-                <div className="p-2 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-800 flex items-center gap-1.5 mb-2">
-                  <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  <span>Element is <b>Non-Editable</b>. Change to <b>Yes</b> above to enable editing.</span>
-                </div>
-              )}
 
               <div className="grid grid-cols-2 gap-2">
                 <div>

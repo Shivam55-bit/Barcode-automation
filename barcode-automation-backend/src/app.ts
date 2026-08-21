@@ -8,6 +8,7 @@ import { usersRouter } from './routes/users';
 import { gs1Router } from './routes/gs1';
 import { zplRouter } from './routes/zpl';
 import { aiRouter } from './routes/ai';
+import { viewerLogsRouter } from './routes/viewerLogs';
 import { SAMPLE_ENTERPRISE_DATASETS } from '../../src/services/databaseConnectorService';
 
 export function createBackendApp(): express.Application {
@@ -48,6 +49,7 @@ export function createBackendApp(): express.Application {
   app.use('/api/gs1', gs1Router);
   app.use('/api/zpl', zplRouter);
   app.use('/api/ai', aiRouter);
+  app.use('/api/viewer', viewerLogsRouter);
 
   // Sample Enterprise Datasets
   app.get('/api/database/sample-datasets', (req, res) => {

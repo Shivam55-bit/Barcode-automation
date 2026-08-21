@@ -40,6 +40,10 @@ export class StorageService {
   private seedDefaultsIfEmpty(): void {
     const seedMap: Record<string, any[]> = {
       templates: INITIAL_TEMPLATES,
+      templateVersions: [],
+      approvals: [],
+      approvalComments: [],
+      viewerLogs: [],
       printers: INITIAL_PRINTERS,
       printJobs: INITIAL_PRINT_JOBS,
       auditLogs: INITIAL_AUDIT_LOGS,

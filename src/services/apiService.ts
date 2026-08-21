@@ -90,6 +90,71 @@ export const apiService = {
       });
     },
 
+    submit: async (payload: {
+      templateId: string;
+      submittedBy: string;
+      comments?: string;
+      snapshot?: any;
+    }): Promise<{ success: boolean; version: string; snapshot: any; template: LabelTemplate }> => {
+      return request<{ success: boolean; version: string; snapshot: any; template: LabelTemplate }>('/templates/submit', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+
+    approve: async (payload: {
+      templateId: string;
+      version?: string;
+      level?: number;
+      reviewerName: string;
+      reviewerEmail?: string;
+      digitalSignature?: string;
+      comment?: string;
+      isFinal?: boolean;
+    }): Promise<{ success: boolean; status: TemplateStatus; snapshot: any; template: LabelTemplate }> => {
+      return request<{ success: boolean; status: TemplateStatus; snapshot: any; template: LabelTemplate }>('/templates/approve', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+
+    reject: async (payload: {
+      templateId: string;
+      version?: string;
+      reviewerName: string;
+      reason: string;
+    }): Promise<{ success: boolean; status: string; snapshot: any }> => {
+      return request<{ success: boolean; status: string; snapshot: any }>('/templates/reject', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+
+    requestChange: async (payload: {
+      templateId: string;
+      version?: string;
+      reviewerName: string;
+      comment: string;
+      annotations?: any[];
+    }): Promise<{ success: boolean; status: string; template: LabelTemplate; snapshot: any }> => {
+      return request<{ success: boolean; status: string; template: LabelTemplate; snapshot: any }>('/templates/request-change', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+
+    getVersion: async (idOrTemplateId: string): Promise<any> => {
+      return request<any>(`/templates/version/${idOrTemplateId}`);
+    },
+
+    getPreview: async (idOrTemplateId: string): Promise<any> => {
+      return request<any>(`/templates/preview/${idOrTemplateId}`);
+    },
+
+    getHistory: async (templateId: string): Promise<{ templateId: string; templateName: string; currentVersion: string; currentStatus: TemplateStatus; versions: any[]; approvals: any[] }> => {
+      return request<{ templateId: string; templateName: string; currentVersion: string; currentStatus: TemplateStatus; versions: any[]; approvals: any[] }>(`/templates/history/${templateId}`);
+    },
+
     updateStatus: async (
       id: string,
       status: TemplateStatus,
@@ -101,6 +166,34 @@ export const apiService = {
         method: 'PATCH',
         body: JSON.stringify({ status, comment, reviewerName, eSignature }),
       });
+    },
+  },
+
+  // --- Viewer Logs API ---
+  viewer: {
+    log: async (entry: {
+      templateId: string;
+      templateVersion: string;
+      jobId?: string;
+      action: 'VIEW' | 'ZOOM' | 'DOWNLOAD_PDF' | 'DOWNLOAD_PNG' | 'PRINT_DISPATCH';
+      userName: string;
+      userRole: string;
+      details: string;
+      pagesViewedOrPrinted?: string;
+      printerName?: string;
+    }) => {
+      return request<any>('/viewer', {
+        method: 'POST',
+        body: JSON.stringify(entry),
+      });
+    },
+
+    getLogs: async (params?: { templateId?: string; jobId?: string }) => {
+      const query = new URLSearchParams();
+      if (params?.templateId) query.set('templateId', params.templateId);
+      if (params?.jobId) query.set('jobId', params.jobId);
+      const qs = query.toString();
+      return request<any[]>(`/viewer${qs ? `?${qs}` : ''}`);
     },
   },
 

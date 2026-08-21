@@ -440,7 +440,7 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
                           : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
                       }`}
                     >
-                      <div className="flex items-center gap-2 overflow-hidden flex-1 mr-2">
+                      <div className="flex items-center gap-1.5 overflow-hidden flex-1 mr-2">
                         {el.type === 'text' && <Type className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
                         {el.type === 'barcode' && <Barcode className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
                         {el.type === 'shape' && <Square className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
@@ -465,13 +465,24 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
                             className="bg-white border border-blue-400 px-1 py-0.5 rounded text-xs outline-none w-full"
                           />
                         ) : (
-                          <span
-                            onDoubleClick={() => setEditingLayerId(el.id)}
-                            className="truncate text-xs"
-                            title="Double-click to rename"
-                          >
-                            {el.name}
-                          </span>
+                          <div className="flex items-center gap-1 truncate">
+                            <span
+                              onDoubleClick={() => setEditingLayerId(el.id)}
+                              className="truncate text-xs"
+                              title="Double-click to rename"
+                            >
+                              {el.name}
+                            </span>
+                            {el.locked ? (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-amber-100 text-amber-800 font-bold border border-amber-200 shrink-0">
+                                Locked
+                              </span>
+                            ) : (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 text-slate-600 font-medium shrink-0">
+                                Editable
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
 
@@ -490,10 +501,20 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onUpdateElement(el.id, { locked: !el.locked });
+                            const newLocked = !el.locked;
+                            onUpdateElement(el.id, {
+                              locked: newLocked,
+                              editable: !newLocked,
+                              allowMove: !newLocked,
+                              allowResize: !newLocked,
+                              allowRotate: !newLocked,
+                              allowDelete: !newLocked,
+                              allowContentEdit: !newLocked,
+                              allowPropertyEdit: !newLocked,
+                            });
                           }}
                           className="p-1 hover:bg-slate-200 rounded text-slate-500"
-                          title={el.locked ? 'Unlock Layer' : 'Lock Layer'}
+                          title={el.locked ? 'Unlock Field' : 'Lock Field (Freeze Position & Properties)'}
                         >
                           {el.locked ? <Lock className="w-3.5 h-3.5 text-amber-600" /> : <Unlock className="w-3.5 h-3.5 text-slate-300" />}
                         </button>
@@ -510,10 +531,11 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            onDeleteElement(el.id);
+                            if (!el.locked) onDeleteElement(el.id);
                           }}
-                          className="p-1 hover:bg-red-100 rounded text-red-500"
-                          title="Delete Layer"
+                          disabled={el.locked}
+                          className="p-1 hover:bg-red-100 disabled:opacity-30 rounded text-red-500"
+                          title={el.locked ? 'Cannot delete locked field' : 'Delete Layer'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

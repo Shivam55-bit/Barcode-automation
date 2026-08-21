@@ -33,10 +33,14 @@ interface DashboardViewProps {
   printJobs: PrintJob[];
   auditLogs: AuditLogEntry[];
   currentUser: UserProfile;
+  allUsers?: UserProfile[];
   onOpenTemplate: (id: string) => void;
   onOpenDesigner: () => void;
   onOpenPrintCenter: () => void;
   onOpenAuditLogs: () => void;
+  onNavigateToWorkflow?: () => void;
+  onNavigateToViewer?: () => void;
+  onSwitchUser?: (user: UserProfile) => void;
   onLogout?: () => void;
   onCreateNewTemplate?: () => void;
   onDuplicateTemplate?: (id: string) => void;
@@ -51,10 +55,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   printJobs,
   auditLogs,
   currentUser,
+  allUsers,
   onOpenTemplate,
   onOpenDesigner,
   onOpenPrintCenter,
   onOpenAuditLogs,
+  onNavigateToWorkflow,
+  onNavigateToViewer,
+  onSwitchUser,
   onLogout,
   onCreateNewTemplate,
   onDuplicateTemplate,
@@ -158,6 +166,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
               <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase">
                 Studio
+              </span>
+            </button>
+
+            {/* Approval Workflow Button */}
+            <button
+              onClick={onNavigateToWorkflow}
+              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-amber-800 hover:bg-amber-50/80 transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <ShieldCheck className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
+                <span className="font-semibold text-slate-800 group-hover:text-amber-700">Approval Workflow</span>
+              </div>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                pendingCount > 0 ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600'
+              }`}>
+                {pendingCount} Pending
+              </span>
+            </button>
+
+            {/* Viewer & Print Station Button */}
+            <button
+              onClick={onNavigateToViewer}
+              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-indigo-700 hover:bg-indigo-50/80 transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <Eye className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
+                <span className="font-semibold text-slate-800 group-hover:text-indigo-600">Viewer Station</span>
+              </div>
+              <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded uppercase">
+                10-Pack
               </span>
             </button>
 
@@ -277,42 +315,92 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </p>
           </div>
 
-          {/* 4 Pastel Statistic Metric Cards matching screenshot */}
+          {/* 4 Pastel Statistic Metric Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {/* Card 1: My Drafts (Pastel Lavender Blue) */}
             <div
               onClick={() => setActiveTab('drafts')}
-              className="bg-[#f1f3fd] border border-[#dce3fc] rounded-2xl p-6 transition-all hover:shadow-sm cursor-pointer"
+              className="bg-[#f1f3fd] border border-[#dce3fc] rounded-2xl p-6 transition-all hover:shadow-md cursor-pointer group"
             >
-              <div className="text-xs font-semibold text-slate-600">My Drafts</div>
+              <div className="text-xs font-semibold text-slate-600 group-hover:text-blue-700">My Drafts</div>
               <div className="text-4xl font-bold text-[#5569f7] mt-3">{draftCount}</div>
+              <div className="text-[10px] text-blue-600 mt-2 font-medium">Click to view drafts →</div>
             </div>
 
             {/* Card 2: Pending Approvals (Pastel Mint Green) */}
             <div
-              onClick={() => setActiveTab('templates')}
-              className="bg-[#eefbf4] border border-[#cbf5de] rounded-2xl p-6 transition-all hover:shadow-sm cursor-pointer"
+              onClick={() => onNavigateToWorkflow ? onNavigateToWorkflow() : setActiveTab('templates')}
+              className="bg-[#eefbf4] border border-[#cbf5de] rounded-2xl p-6 transition-all hover:shadow-md cursor-pointer group hover:border-emerald-400"
             >
-              <div className="text-xs font-semibold text-slate-600">Pending Approvals</div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-600 group-hover:text-emerald-800">Pending Approvals</span>
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              </div>
               <div className="text-4xl font-bold text-[#22c55e] mt-3">{pendingCount}</div>
+              <div className="text-[10px] text-emerald-700 mt-2 font-bold flex items-center gap-1">
+                <span>Open Approval Workflow →</span>
+              </div>
             </div>
 
             {/* Card 3: Approved Templates (Pastel Warm Yellow) */}
             <div
-              onClick={() => setActiveTab('approved')}
-              className="bg-[#fef8e7] border border-[#fce7ad] rounded-2xl p-6 transition-all hover:shadow-sm cursor-pointer"
+              onClick={() => onNavigateToViewer ? onNavigateToViewer() : setActiveTab('approved')}
+              className="bg-[#fef8e7] border border-[#fce7ad] rounded-2xl p-6 transition-all hover:shadow-md cursor-pointer group hover:border-amber-400"
             >
-              <div className="text-xs font-semibold text-slate-600">Approved Templates</div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-600 group-hover:text-amber-800">Approved Templates</span>
+                <Eye className="w-4 h-4 text-amber-600" />
+              </div>
               <div className="text-4xl font-bold text-[#eab308] mt-3">{approvedCount}</div>
+              <div className="text-[10px] text-amber-700 mt-2 font-bold flex items-center gap-1">
+                <span>Open Viewer Station →</span>
+              </div>
             </div>
 
             {/* Card 4: Rejected Templates (Pastel Rose Pink) */}
             <div
-              onClick={() => setActiveTab('templates')}
-              className="bg-[#fdf0f2] border border-[#fad3da] rounded-2xl p-6 transition-all hover:shadow-sm cursor-pointer"
+              onClick={() => onNavigateToWorkflow ? onNavigateToWorkflow() : setActiveTab('templates')}
+              className="bg-[#fdf0f2] border border-[#fad3da] rounded-2xl p-6 transition-all hover:shadow-md cursor-pointer group"
             >
-              <div className="text-xs font-semibold text-slate-600">Rejected Templates</div>
+              <div className="text-xs font-semibold text-slate-600 group-hover:text-rose-700">Rejected Templates</div>
               <div className="text-4xl font-bold text-[#f43f5e] mt-3">{rejectedCount}</div>
+              <div className="text-[10px] text-rose-600 mt-2 font-medium">Review change requests →</div>
+            </div>
+          </div>
+
+          {/* Top Quick Navigation Pills for Workflow & Viewer */}
+          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center text-amber-400 shrink-0">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">Enterprise Lifecycle Navigation</h3>
+                <p className="text-[11px] text-slate-300">Fast switch between Studio Designer, Approval Station, and Viewer Print Spooler.</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={onOpenDesigner}
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+              >
+                <PenTool className="w-3.5 h-3.5" />
+                <span>Open Studio</span>
+              </button>
+              <button
+                onClick={onNavigateToWorkflow}
+                className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-slate-950" />
+                <span>Approval Workflow</span>
+              </button>
+              <button
+                onClick={onNavigateToViewer}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Viewer Station</span>
+              </button>
             </div>
           </div>
 

@@ -234,7 +234,15 @@ export interface BaseElement extends PositionAndSize {
   name: string;
   type: ElementType;
   locked: boolean;
-  isEditable?: boolean; // When false, element is read-only and non-editable
+  editable?: boolean; // When false, element is read-only and non-editable
+  isEditable?: boolean; // Legacy alias for editable
+  allowMove?: boolean;
+  allowResize?: boolean;
+  allowRotate?: boolean;
+  allowDelete?: boolean;
+  allowContentEdit?: boolean;
+  allowPropertyEdit?: boolean;
+  allowVariableEdit?: boolean;
   visible: boolean;
   printable?: boolean;
   opacity: number; // 0 to 1
@@ -581,12 +589,132 @@ export interface PrintJob {
   errorMessage?: string;
 }
 
+export interface CanvasAnnotation {
+  id: string;
+  x: number; // in mm
+  y: number; // in mm
+  elementId?: string;
+  elementName?: string;
+  text: string;
+  author: string;
+  authorRole: string;
+  createdAt: string;
+  resolved?: boolean;
+}
+
+export interface ApprovalTierRecord {
+  id: string;
+  level: 1 | 2;
+  role: string;
+  status: 'pending' | 'approved' | 'rejected' | 'changes_requested';
+  reviewerName?: string;
+  reviewerEmail?: string;
+  timestamp?: string;
+  comment?: string;
+  digitalSignature?: string;
+}
+
+export interface TemplateVersionSnapshot {
+  id: string;
+  version: string;
+  templateId: string;
+  templateName: string;
+  snapshotJson: LabelTemplate;
+  canvasJson: {
+    dimensions: LabelDimensions;
+    margins: LabelMargins;
+    sheetGrid?: SheetGridConfig;
+    scaleDpi: DpiOption;
+    elementCount: number;
+  };
+  svgSnapshot: string;
+  pngSnapshot: string;
+  pdfSnapshot?: string;
+  objectTree: Array<{
+    id: string;
+    name: string;
+    type: ElementType;
+    locked: boolean;
+    editable: boolean;
+    position: { x: number; y: number; width: number; height: number; rotation: number };
+    zIndex: number;
+  }>;
+  objectProperties: Record<string, any>;
+  variableMapping: Record<string, { type: VariableType; defaultValue: string; dataBinding?: string }>;
+  hash: string; // SHA-256 integrity hash
+  checksum: string;
+  status: TemplateStatus;
+  submittedBy: string;
+  submittedAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalTimeline: ApprovalTierRecord[];
+  annotations?: CanvasAnnotation[];
+  comments?: TemplateComment[];
+  diffSummary?: string;
+}
+
+export interface VersionDiffResult {
+  versionA: string;
+  versionB: string;
+  hasChanges: boolean;
+  addedElements: LabelElement[];
+  removedElements: LabelElement[];
+  modifiedElements: Array<{
+    id: string;
+    name: string;
+    type: ElementType;
+    changes: Array<{
+      property: string;
+      oldValue: any;
+      newValue: any;
+    }>;
+  }>;
+  dimensionChanged: boolean;
+  variableChanges: Array<{
+    name: string;
+    action: 'added' | 'removed' | 'modified';
+    details: string;
+  }>;
+}
+
+export interface ViewerLogEntry {
+  id: string;
+  timestamp: string;
+  templateId: string;
+  templateVersion: string;
+  jobId?: string;
+  action: 'VIEW' | 'ZOOM' | 'DOWNLOAD_PDF' | 'DOWNLOAD_PNG' | 'PRINT_DISPATCH';
+  userName: string;
+  userRole: string;
+  details: string;
+  pagesViewedOrPrinted?: string;
+  printerName?: string;
+  ipAddress?: string;
+}
+
 export interface AuditLogEntry {
   id: string;
   timestamp: string;
   user: string;
   userRole: string;
-  action: 'CREATE_TEMPLATE' | 'EDIT_TEMPLATE' | 'SUBMIT_APPROVAL' | 'APPROVE_TEMPLATE' | 'REJECT_TEMPLATE' | 'PUBLISH_TEMPLATE' | 'PRINT_JOB_DISPATCH' | 'VARIABLE_UPDATE' | 'IMPORT_DATA' | 'SYSTEM_CONFIG' | 'ROLLBACK_VERSION';
+  action:
+    | 'CREATE_TEMPLATE'
+    | 'EDIT_TEMPLATE'
+    | 'SUBMIT_APPROVAL'
+    | 'APPROVE_TEMPLATE'
+    | 'REJECT_TEMPLATE'
+    | 'REQUEST_CHANGE'
+    | 'PUBLISH_TEMPLATE'
+    | 'PRINT_JOB_DISPATCH'
+    | 'VARIABLE_UPDATE'
+    | 'IMPORT_DATA'
+    | 'SYSTEM_CONFIG'
+    | 'ROLLBACK_VERSION'
+    | 'VIEW_TEMPLATE'
+    | 'DOWNLOAD_PDF'
+    | 'DOWNLOAD_PNG'
+    | 'ANNOTATE_TEMPLATE';
   details: string;
   entityId?: string;
   entityName?: string;

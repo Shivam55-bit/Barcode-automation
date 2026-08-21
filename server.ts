@@ -15,8 +15,8 @@ async function startServer() {
   const indexPath = path.join(distPath, 'index.html');
   const hasBuiltAssets = fs.existsSync(indexPath);
 
-  // If built frontend exists or in production mode, serve static assets directly
-  if (hasBuiltAssets || process.env.NODE_ENV === 'production') {
+  // In production mode, serve static assets directly; otherwise use live Vite middleware
+  if (process.env.NODE_ENV === 'production') {
     console.log(`[Server] Serving production SPA build from: ${distPath}`);
     app.use(express.static(distPath));
 
@@ -27,7 +27,7 @@ async function startServer() {
       res.sendFile(indexPath);
     });
   } else {
-    console.log(`[Server] Starting Vite development middleware...`);
+    console.log(`[Server] Starting live Vite development middleware...`);
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
