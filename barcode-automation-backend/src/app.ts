@@ -9,6 +9,9 @@ import { gs1Router } from './routes/gs1';
 import { zplRouter } from './routes/zpl';
 import { aiRouter } from './routes/ai';
 import { viewerLogsRouter } from './routes/viewerLogs';
+import { datasetsRouter } from './routes/datasets';
+import { licenseRouter } from './routes/license';
+import { exportRouter } from './routes/export';
 import { SAMPLE_ENTERPRISE_DATASETS } from '../../src/services/databaseConnectorService';
 
 export function createBackendApp(): express.Application {
@@ -41,6 +44,7 @@ export function createBackendApp(): express.Application {
   // REST API Routes
   app.use('/api/templates', templatesRouter);
   app.use('/api/print-jobs', printJobsRouter);
+  app.use('/api/print', printJobsRouter);
   app.use('/api/batch-jobs', batchJobsRouter);
   app.use('/api/printers', printersRouter);
   app.use('/api/audit-logs', auditLogsRouter);
@@ -50,6 +54,9 @@ export function createBackendApp(): express.Application {
   app.use('/api/zpl', zplRouter);
   app.use('/api/ai', aiRouter);
   app.use('/api/viewer', viewerLogsRouter);
+  app.use('/api/datasets', datasetsRouter);
+  app.use('/api/license', licenseRouter);
+  app.use('/api/export', exportRouter);
 
   // Sample Enterprise Datasets
   app.get('/api/database/sample-datasets', (req, res) => {

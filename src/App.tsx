@@ -25,6 +25,9 @@ import { DashboardView } from './components/views/DashboardView';
 import { PrintQueueView } from './components/views/PrintQueueView';
 import { WorkflowView } from './components/views/WorkflowView';
 import { ViewerPrintStationView } from './components/views/ViewerPrintStationView';
+import { DatasetManagerView } from './components/views/DatasetManagerView';
+import { LicenseManagerView } from './components/views/LicenseManagerView';
+import { PrinterCalibrationModal } from './components/dialogs/PrinterCalibrationModal';
 import { LoginView } from './components/views/LoginView';
 
 import { BarcodePickerModal } from './components/dialogs/BarcodePickerModal';
@@ -65,7 +68,10 @@ export default function App() {
   const [activeTool, setActiveTool] = useState<
     'select' | 'text' | 'barcode' | 'qr' | 'datamatrix' | 'rect' | 'circle' | 'line' | 'table' | 'image'
   >('select');
-  const [activeView, setActiveView] = useState<'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer'>('designer');
+  const [activeView, setActiveView] = useState<
+    'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer' | 'datasets' | 'license'
+  >('designer');
+  const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState<boolean>(false);
 
   // Enterprise Systems State
   const [printers, setPrinters] = useState<PrinterDefinition[]>(INITIAL_PRINTERS);
@@ -1627,6 +1633,11 @@ export default function App() {
           onOpenDesigner={() => setActiveView('designer')}
           onOpenPrintCenter={() => setIsPrintDialogOpen(true)}
           onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
+          onNavigateToWorkflow={() => setActiveView('workflow')}
+          onNavigateToViewer={() => setActiveView('viewer')}
+          onNavigateToDatasets={() => setActiveView('datasets')}
+          onNavigateToLicense={() => setActiveView('license')}
+          onOpenCalibrationModal={() => setIsCalibrationModalOpen(true)}
           onDuplicateTemplate={handleDuplicateTemplate}
           onDeleteTemplate={handleDeleteTemplate}
         />
@@ -1879,6 +1890,33 @@ export default function App() {
             } catch (err) {
               console.warn('API error in onPrintBatch:', err);
             }
+          }}
+        />
+      )}
+
+      {activeView === 'datasets' && (
+        <DatasetManagerView
+          currentUser={currentUser}
+          onNavigateToDashboard={() => setActiveView('dashboard')}
+          onNavigateToDesigner={() => setActiveView('designer')}
+        />
+      )}
+
+      {activeView === 'license' && (
+        <LicenseManagerView
+          currentUser={currentUser}
+          onNavigateToDashboard={() => setActiveView('dashboard')}
+        />
+      )}
+
+      {isCalibrationModalOpen && (
+        <PrinterCalibrationModal
+          printers={printers}
+          onClose={() => setIsCalibrationModalOpen(false)}
+          onCalibrationSaved={(updatedPrinter) => {
+            setPrinters((prev) => prev.map((p) => (p.id === updatedPrinter.id ? updatedPrinter : p)));
+            showToast(`Saved calibration for printer "${updatedPrinter.name}"!`, 'success');
+            setIsCalibrationModalOpen(false);
           }}
         />
       )}

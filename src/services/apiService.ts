@@ -308,6 +308,131 @@ export const apiService = {
     },
   },
 
+  // --- Datasets API ---
+  datasets: {
+    list: async () => {
+      return request<any[]>('/datasets');
+    },
+    get: async (id: string) => {
+      return request<any>(`/datasets/${id}`);
+    },
+    create: async (dataset: any) => {
+      return request<any>('/datasets', {
+        method: 'POST',
+        body: JSON.stringify(dataset),
+      });
+    },
+    update: async (id: string, dataset: any) => {
+      return request<any>(`/datasets/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(dataset),
+      });
+    },
+    delete: async (id: string) => {
+      return request<{ success: boolean; message: string }>(`/datasets/${id}`, {
+        method: 'DELETE',
+      });
+    },
+    uploadExcel: async (payload: { name?: string; fileName?: string; records: any[]; columns?: string[]; createdBy?: string }) => {
+      return request<any>('/datasets/upload-excel', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+    uploadCsv: async (payload: { name?: string; fileName?: string; csvText?: string; records?: any[]; columns?: string[]; createdBy?: string }) => {
+      return request<any>('/datasets/upload-csv', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+    preview: async (datasetId: string, limit: number = 10, offset: number = 0) => {
+      return request<any>('/datasets/preview', {
+        method: 'POST',
+        body: JSON.stringify({ datasetId, limit, offset }),
+      });
+    },
+  },
+
+  // --- Enterprise Licensing API ---
+  license: {
+    status: async () => {
+      return request<any>('/license/status');
+    },
+    generate: async (payload: { organization?: string; tier?: string; maxPrinters?: number; maxUsers?: number }) => {
+      return request<any>('/license/generate', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+    activate: async (payload: { licenseKey: string; registeredTo?: string; organization?: string }) => {
+      return request<any>('/license/activate', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+    offlineActivate: async (payload: { activationCode: string; licenseKey?: string }) => {
+      return request<any>('/license/offline-activate', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+  },
+
+  // --- Export API ---
+  export: {
+    zpl: async (template: LabelTemplate, record?: Record<string, any>) => {
+      return request<{ format: string; zpl: string; templateName: string; dimensions: any }>('/export/zpl', {
+        method: 'POST',
+        body: JSON.stringify({ template, record }),
+      });
+    },
+    epl: async (template: LabelTemplate, record?: Record<string, any>) => {
+      return request<{ format: string; epl: string; templateName: string; dimensions: any }>('/export/epl', {
+        method: 'POST',
+        body: JSON.stringify({ template, record }),
+      });
+    },
+    pdf: async (payload: { templateId?: string; templateName?: string; pagesCount?: number; pdfDataUrl?: string }) => {
+      return request<any>('/export/pdf', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+    png: async (payload: { templateName?: string; pageNumber?: number; pngDataUrl?: string }) => {
+      return request<any>('/export/png', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+  },
+
+  // --- Expanded Printers API ---
+  printersExt: {
+    getDefault: async () => {
+      return request<PrinterDefinition>('/printers/default');
+    },
+    refresh: async () => {
+      return request<{ success: boolean; count: number; printers: PrinterDefinition[] }>('/printers/refresh', {
+        method: 'POST',
+      });
+    },
+    calibrate: async (payload: {
+      printerId: string;
+      labelWidth?: number;
+      labelHeight?: number;
+      mediaType?: string;
+      dpi?: number;
+      darkness?: number;
+      speed?: number;
+      testPage?: boolean;
+    }) => {
+      return request<{ success: boolean; message: string; printer: any }>('/printers/calibrate', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+  },
+
   // --- Users & Auth API ---
   users: {
     list: async (): Promise<UserProfile[]> => {

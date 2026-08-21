@@ -1,5 +1,16 @@
 [
   {
+    "id": "aud-1787302323001-491",
+    "timestamp": "2026-08-21T08:52:03.002Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
     "id": "aud-1787288954045-125",
     "timestamp": "2026-08-21T05:09:14.045Z",
     "user": "Shivam",

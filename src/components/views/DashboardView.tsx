@@ -37,9 +37,11 @@ interface DashboardViewProps {
   onOpenTemplate: (id: string) => void;
   onOpenDesigner: () => void;
   onOpenPrintCenter: () => void;
-  onOpenAuditLogs: () => void;
   onNavigateToWorkflow?: () => void;
   onNavigateToViewer?: () => void;
+  onNavigateToDatasets?: () => void;
+  onNavigateToLicense?: () => void;
+  onOpenCalibrationModal?: () => void;
   onSwitchUser?: (user: UserProfile) => void;
   onLogout?: () => void;
   onCreateNewTemplate?: () => void;
@@ -198,6 +200,54 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 10-Pack
               </span>
             </button>
+
+            {/* Dataset Manager Button */}
+            {onNavigateToDatasets && (
+              <button
+                onClick={onNavigateToDatasets}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-blue-700 hover:bg-blue-50/80 transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <FileSpreadsheet className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
+                  <span className="font-semibold text-slate-800 group-hover:text-blue-600">Dataset Manager</span>
+                </div>
+                <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-mono">
+                  Excel/CSV
+                </span>
+              </button>
+            )}
+
+            {/* Printer Calibration Wizard Button */}
+            {onOpenCalibrationModal && (
+              <button
+                onClick={onOpenCalibrationModal}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-amber-700 hover:bg-amber-50/80 transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <Sliders className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
+                  <span className="font-semibold text-slate-800 group-hover:text-amber-600">Printer Calibration</span>
+                </div>
+                <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded uppercase font-mono">
+                  Wizard
+                </span>
+              </button>
+            )}
+
+            {/* License & Machine Binding Button */}
+            {onNavigateToLicense && (
+              <button
+                onClick={onNavigateToLicense}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-emerald-700 hover:bg-emerald-50/80 transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 group-hover:scale-110 transition-transform" />
+                  <span className="font-semibold text-slate-800 group-hover:text-emerald-600">License & Binding</span>
+                </div>
+                <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded uppercase font-mono">
+                  GUID
+                </span>
+              </button>
+            )}
 
             {/* My Drafts */}
             <button

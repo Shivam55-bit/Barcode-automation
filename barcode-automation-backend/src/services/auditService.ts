@@ -38,3 +38,18 @@ export function logBackendAudit(
   storage.write('auditLogs', logs);
   return entry;
 }
+
+export class AuditService {
+  private static instance: AuditService;
+
+  public static getInstance(): AuditService {
+    if (!AuditService.instance) {
+      AuditService.instance = new AuditService();
+    }
+    return AuditService.instance;
+  }
+
+  public log(action: string, details: string, user: string = 'System Admin', userRole: string = 'Admin'): AuditLogItem {
+    return logBackendAudit(user, userRole, action, details);
+  }
+}

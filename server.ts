@@ -33,7 +33,12 @@ async function startServer() {
       server: { middlewareMode: true },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api')) {
+        return next();
+      }
+      vite.middlewares(req, res, next);
+    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
