@@ -1,5 +1,27 @@
 [
   {
+    "id": "aud-1787342766356-513",
+    "timestamp": "2026-08-21T20:06:06.356Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
+    "id": "aud-1787342763068-148",
+    "timestamp": "2026-08-21T20:06:03.068Z",
+    "user": "Shivam",
+    "userRole": "Designer",
+    "action": "USER_LOGIN",
+    "details": "User Shivam logged into BarcodeFlow Enterprise Studio",
+    "entityId": "usr-designer",
+    "entityName": "Shivam",
+    "ipAddress": "127.0.0.1"
+  },
+  {
     "id": "aud-1787342288287-322",
     "timestamp": "2026-08-21T19:58:08.287Z",
     "user": "Shivam",

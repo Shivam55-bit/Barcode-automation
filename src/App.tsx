@@ -30,6 +30,7 @@ import { LicenseManagerView } from './components/views/LicenseManagerView';
 import { SoftwareDownloadView } from './components/views/SoftwareDownloadView';
 import { PrinterCalibrationModal } from './components/dialogs/PrinterCalibrationModal';
 import { LoginView } from './components/views/LoginView';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 import { BarcodePickerModal } from './components/dialogs/BarcodePickerModal';
 import { BarcodePropertiesModal } from './components/dialogs/BarcodePropertiesModal';
@@ -78,9 +79,27 @@ export default function App() {
   const [printers, setPrinters] = useState<PrinterDefinition[]>(INITIAL_PRINTERS);
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(INITIAL_PRINT_JOBS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
-  const [currentUser, setCurrentUser] = useState<UserProfile>(INITIAL_USERS[0]);
+  const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
+    try {
+      const saved = localStorage.getItem('barcodeflow_auth_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.user) return parsed.user;
+      }
+    } catch {}
+    return INITIAL_USERS[0];
+  });
   const [batchJobs, setBatchJobs] = useState<any[]>(INITIAL_BATCH_JOBS);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('barcodeflow_auth_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.authenticated === true;
+      }
+    } catch {}
+    return true; // Keep user authenticated across page reloads and prevent auto-logout
+  });
 
   // Viewport & Canvas Settings
   const [viewport, setViewport] = useState<ViewportState>({
@@ -1112,6 +1131,9 @@ export default function App() {
   const handleLoginSuccess = (user: UserProfile) => {
     setCurrentUser(user);
     setIsAuthenticated(true);
+    try {
+      localStorage.setItem('barcodeflow_auth_session', JSON.stringify({ authenticated: true, user }));
+    } catch {}
     // After login, direct to BarcodeFlow Dashboard Portal (as requested)
     setActiveView('dashboard');
     showToast(`Welcome ${user.name}! BarcodeFlow Label Management portal loaded.`, 'success');
@@ -1119,13 +1141,16 @@ export default function App() {
 
   const handleLogout = () => {
     setIsAuthenticated(false);
+    try {
+      localStorage.removeItem('barcodeflow_auth_session');
+    } catch {}
     showToast('Signed out successfully. Please log in to continue.', 'info');
   };
 
   // If not authenticated, render the dedicated LoginView
   if (!isAuthenticated) {
     return (
-      <>
+      <ErrorBoundary fallbackTitle="Authentication Screen Error">
         {notification && (
           <div
             className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${
@@ -1141,14 +1166,14 @@ export default function App() {
           </div>
         )}
         <LoginView onLoginSuccess={handleLoginSuccess} initialUsers={INITIAL_USERS} />
-      </>
+      </ErrorBoundary>
     );
   }
 
   // If activeView is 'dashboard', render the dedicated BarcodeFlow Portal layout
   if (activeView === 'dashboard') {
     return (
-      <>
+      <ErrorBoundary fallbackTitle="Dashboard Workspace Error">
         {notification && (
           <div
             className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${
@@ -1199,7 +1224,7 @@ export default function App() {
           onDuplicateTemplate={handleDuplicateTemplate}
           onDeleteTemplate={handleDeleteTemplate}
         />
-      </>
+      </ErrorBoundary>
     );
   }
 
