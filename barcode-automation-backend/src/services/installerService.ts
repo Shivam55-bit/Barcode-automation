@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 
 /**
  * Service to ensure valid physical Windows Executable (.exe) installers exist
@@ -26,7 +27,7 @@ export class InstallerService {
   }
 
   /**
-   * Generates or locates the physical .exe installer file for the requested version.
+   * Generates or locates the physical genuine .exe installer file for the requested version.
    */
   public ensureInstallerBinaries(): void {
     try {
@@ -34,85 +35,39 @@ export class InstallerService {
         fs.mkdirSync(this.downloadsDir, { recursive: true });
       }
 
-      const versions = ['2.5.0', '2.4.0', '2.0.0'];
-      for (const ver of versions) {
-        const primaryExePath = path.join(this.downloadsDir, `BarcodeFlow_Setup_v${ver}.exe`);
-        const fallbackExePath = path.join(this.downloadsDir, `BarcodeFlow_Setup.exe`);
+      const binExe = path.resolve(process.cwd(), 'bin', 'BarcodeFlow_Setup_v2.5.0.exe');
+      const csScript = path.resolve(process.cwd(), 'scripts', 'Installer.cs');
 
-        if (!fs.existsSync(primaryExePath)) {
-          this.createValidPEBinary(primaryExePath, ver);
-        }
-        if (!fs.existsSync(fallbackExePath)) {
-          this.createValidPEBinary(fallbackExePath, ver);
+      // Compile genuine Windows x64 Native C# GUI Setup Wizard if not yet built
+      if (!fs.existsSync(binExe) && fs.existsSync(csScript)) {
+        try {
+          const cscPath = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+          if (fs.existsSync(cscPath)) {
+            const binDir = path.resolve(process.cwd(), 'bin');
+            if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
+            execSync(`"${cscPath}" /target:winexe /platform:anycpu /out:"${binExe}" "${csScript}"`, {
+              stdio: 'ignore'
+            });
+          }
+        } catch (err) {
+          console.warn('[InstallerService] CSC compilation warning:', err);
         }
       }
 
-      // Also ensure dist-electron-build folder has setup .exe
-      const distBuildDir = path.resolve(process.cwd(), 'dist-electron-build');
-      if (!fs.existsSync(distBuildDir)) {
-        fs.mkdirSync(distBuildDir, { recursive: true });
-      }
-      const distSetupExe = path.join(distBuildDir, 'BarcodeFlow_Setup.exe');
-      if (!fs.existsSync(distSetupExe)) {
-        this.createValidPEBinary(distSetupExe, '2.5.0');
+      // Copy genuine executable into downloads
+      const targetExe = path.join(this.downloadsDir, 'BarcodeFlow_Setup_v2.5.0.exe');
+      const fallbackExe = path.join(this.downloadsDir, 'BarcodeFlow_Setup.exe');
+
+      if (fs.existsSync(binExe)) {
+        if (!fs.existsSync(targetExe) || fs.statSync(targetExe).size !== fs.statSync(binExe).size) {
+          fs.copyFileSync(binExe, targetExe);
+        }
+        if (!fs.existsSync(fallbackExe) || fs.statSync(fallbackExe).size !== fs.statSync(binExe).size) {
+          fs.copyFileSync(binExe, fallbackExe);
+        }
       }
     } catch (err) {
       console.error('[InstallerService] Error ensuring binaries:', err);
-    }
-  }
-
-  /**
-   * Creates a standard Windows Portable Executable (.exe) binary container
-   * with DOS Header (MZ), PE signature, and self-contained installer payload.
-   */
-  private createValidPEBinary(targetPath: string, version: string): void {
-    try {
-      // Standard DOS Header & Stub for Windows Portable Executable (MZ)
-      const dosHeader = Buffer.from([
-        0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00,
-        0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,
-        0x0e, 0x1f, 0xba, 0x0e, 0x00, 0xb4, 0x09, 0xcd, 0x21, 0xb8, 0x01, 0x4c, 0xcd, 0x21, 0x54, 0x68,
-        0x69, 0x73, 0x20, 0x70, 0x72, 0x6f, 0x67, 0x72, 0x61, 0x6d, 0x20, 0x63, 0x61, 0x6e, 0x6e, 0x6f,
-        0x74, 0x20, 0x62, 0x65, 0x20, 0x72, 0x75, 0x6e, 0x20, 0x69, 0x6e, 0x20, 0x44, 0x4f, 0x53, 0x20,
-        0x6d, 0x6f, 0x64, 0x65, 0x2e, 0x0d, 0x0d, 0x0a, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      ]);
-
-      // PE Signature "PE\0\0" (0x50, 0x45, 0x00, 0x00)
-      const peHeader = Buffer.from([
-        0x50, 0x45, 0x00, 0x00, 0x64, 0x86, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0xf0, 0x00, 0x22, 0x00, 0x0b, 0x02, 0x0e, 0x1e, 0x00, 0x10, 0x00, 0x00
-      ]);
-
-      const manifestInfo = JSON.stringify(
-        {
-          appName: 'BarcodeFlow Enterprise Suite',
-          version,
-          architecture: 'x64',
-          author: 'Shivam Enterprise Automation Team',
-          builtAt: new Date().toISOString(),
-          targetRuntime: 'Electron 33 / Node.js 24 Windows Desktop',
-          features: [
-            '100% Offline Mode',
-            'Air-Gapped Hardware GUID Binding',
-            'Native Zebra ZPL II / EPL2 Spooling',
-            'Excel & CSV Dataset Dynamic Binding',
-            '21 CFR Part 11 Audit Trail'
-          ]
-        },
-        null,
-        2
-      );
-      const manifestBuffer = Buffer.from(manifestInfo, 'utf-8');
-
-      // Create a clean installer package binary
-      const padding = Buffer.alloc(1024 * 1024 * 5, 0x20); // 5MB simulated initial package payload
-      const combined = Buffer.concat([dosHeader, peHeader, manifestBuffer, padding]);
-
-      fs.writeFileSync(targetPath, combined);
-    } catch (err) {
-      console.error(`[InstallerService] Failed creating binary at ${targetPath}:`, err);
     }
   }
 
@@ -124,6 +79,7 @@ export class InstallerService {
 
     const candidates = [
       path.join(this.downloadsDir, `BarcodeFlow_Setup_v${version}.exe`),
+      path.resolve(process.cwd(), 'bin', `BarcodeFlow_Setup_v${version}.exe`),
       path.join(this.downloadsDir, 'BarcodeFlow_Setup.exe'),
       path.resolve(process.cwd(), 'dist-electron-build', `BarcodeFlow_Setup_v${version}.exe`),
       path.resolve(process.cwd(), 'dist-electron-build', 'BarcodeFlow_Setup.exe'),
