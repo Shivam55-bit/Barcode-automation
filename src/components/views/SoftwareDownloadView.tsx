@@ -82,9 +82,9 @@ export const SoftwareDownloadView: React.FC<SoftwareDownloadViewProps> = ({
       setDownloadedBytesText('Initiating secure handshake...');
 
       const targetVersion = latestRelease?.version || '2.5.0';
-      const downloadUrl = `/api/software/download?v=${targetVersion}`;
+      const downloadUrl = `/api/software/download?v=${targetVersion}&t=${Date.now()}`;
 
-      const response = await fetch(downloadUrl);
+      const response = await fetch(downloadUrl, { cache: 'no-store' });
 
       // Verify server response before proceeding
       if (!response.ok) {
