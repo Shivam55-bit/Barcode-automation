@@ -275,11 +275,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     <span>Field Lock & Security</span>
                   </div>
                   <span
-                    className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase border ${
-                      selectedElement.locked
+                    className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase border ${selectedElement.locked
                         ? 'bg-amber-100 text-amber-800 border-amber-300'
                         : 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    }`}
+                      }`}
                   >
                     {selectedElement.locked ? 'LOCKED / FIXED' : 'EDITABLE'}
                   </span>

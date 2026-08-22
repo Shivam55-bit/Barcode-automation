@@ -46,6 +46,8 @@ interface DashboardViewProps {
   onNavigateToLicense?: () => void;
   onNavigateToSoftwareDownload?: () => void;
   onOpenCalibrationModal?: () => void;
+  onOpenSettings?: (tab?: string) => void;
+  onNavigateToSuperAdmin?: () => void;
   onSwitchUser?: (user: UserProfile) => void;
   onLogout?: () => void;
   onCreateNewTemplate?: () => void;
@@ -70,6 +72,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateToViewer,
   onNavigateToDatasets,
   onOpenCalibrationModal,
+  onOpenSettings,
+  onNavigateToSuperAdmin,
   onNavigateToLicense,
   onNavigateToSoftwareDownload,
   onSwitchUser,
@@ -79,31 +83,77 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onDeleteTemplate,
 }) => {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [scopeTab, setScopeTab] = useState<'my_workspace' | 'enterprise_library' | 'all'>('my_workspace');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
-  // Calculate statistics (dynamically include printed & drafts in My Drafts)
-  const draftsList = templates.filter(
-    (t) => t.status === 'draft' || t.tags?.includes('Draft') || t.tags?.includes('Printed')
+  // Helper: Check if a template belongs to the currently logged in user
+  const isCurrentUserTemplate = (tmpl: LabelTemplate): boolean => {
+    if (tmpl.authorEmail && currentUser?.email && tmpl.authorEmail.toLowerCase() === currentUser.email.toLowerCase()) {
+      return true;
+    }
+    if (tmpl.createdBy && (tmpl.createdBy === currentUser?.id || tmpl.createdBy === currentUser?.name)) {
+      return true;
+    }
+    // Default legacy assignment for original shivam@gmail.com
+    if (currentUser?.email?.toLowerCase() === 'shivam@gmail.com' && (!tmpl.authorEmail || tmpl.createdBy === 'Administrator')) {
+      return true;
+    }
+    return false;
+  };
+
+  // User-scoped template collections
+  const myTemplates = templates.filter(isCurrentUserTemplate);
+  const enterpriseLibraryTemplates = templates.filter(
+    (t) => !isCurrentUserTemplate(t) || t.createdBy?.includes('System') || t.tags?.includes('Industrial')
   );
-  const pendingList = templates.filter((t) => t.status === 'submitted' || t.status === 'pending_level_1' || t.status === 'pending_level_2');
-  const approvedList = templates.filter((t) => t.status === 'approved' || t.status === 'published');
-  const rejectedList = templates.filter((t) => t.status === 'rejected');
+
+  // Calculate statistics scoped to current user
+  const draftsList = templates.filter(
+    (t) =>
+      (t.status === 'draft' || t.tags?.includes('Draft') || t.tags?.includes('Printed')) &&
+      isCurrentUserTemplate(t)
+  );
+  const pendingList = templates.filter(
+    (t) =>
+      (t.status === 'submitted' || t.status === 'pending_level_1' || t.status === 'pending_level_2') &&
+      isCurrentUserTemplate(t)
+  );
+  const approvedList = templates.filter(
+    (t) =>
+      (t.status === 'approved' || t.status === 'published') &&
+      (scopeTab === 'my_workspace' ? isCurrentUserTemplate(t) : true)
+  );
+  const rejectedList = templates.filter(
+    (t) => t.status === 'rejected' && isCurrentUserTemplate(t)
+  );
 
   const draftCount = draftsList.length;
   const pendingCount = pendingList.length;
   const approvedCount = approvedList.length;
   const rejectedCount = rejectedList.length;
 
-  // Filter templates based on active tab and search
+  // Filter templates based on active tab, scope, category and search
   const filteredTemplates = templates.filter((tmpl) => {
+    // 1. Workspace scope filter
+    if (scopeTab === 'my_workspace' && !isCurrentUserTemplate(tmpl)) {
+      return false;
+    }
+    if (scopeTab === 'enterprise_library' && isCurrentUserTemplate(tmpl) && !tmpl.createdBy?.includes('System')) {
+      return false;
+    }
+
+    // 2. Tab filter
     if (activeTab === 'drafts') {
       const isDraftOrPrinted =
         tmpl.status === 'draft' || tmpl.tags?.includes('Draft') || tmpl.tags?.includes('Printed');
       if (!isDraftOrPrinted) return false;
+      if (!isCurrentUserTemplate(tmpl)) return false;
     }
     if (activeTab === 'approved' && tmpl.status !== 'approved' && tmpl.status !== 'published') return false;
     if (selectedCategory !== 'all' && tmpl.category !== selectedCategory) return false;
+
+    // 3. Search query filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       return (
@@ -142,11 +192,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Dashboard Button */}
             <button
               onClick={() => setActiveTab('dashboard')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeTab === 'dashboard'
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${activeTab === 'dashboard'
                   ? 'bg-blue-50/80 text-blue-600 border border-blue-200/80 shadow-2xs font-bold'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+                }`}
             >
               <LayoutDashboard className="w-4 h-4 shrink-0" />
               <span>Dashboard</span>
@@ -155,11 +204,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Templates Button */}
             <button
               onClick={() => setActiveTab('templates')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeTab === 'templates'
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${activeTab === 'templates'
                   ? 'bg-blue-50/80 text-blue-600 border border-blue-200/80 shadow-2xs font-bold'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+                }`}
             >
               <Layers className="w-4 h-4 shrink-0" />
               <span>Templates</span>
@@ -188,100 +236,55 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <ShieldCheck className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
                 <span className="font-semibold text-slate-800 group-hover:text-amber-700">Approval Workflow</span>
               </div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                pendingCount > 0 ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600'
-              }`}>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${pendingCount > 0 ? 'bg-amber-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600'
+                }`}>
                 {pendingCount} Pending
               </span>
             </button>
 
-            {/* Viewer & Print Station Button */}
+
+            {/* Super Admin Governance Console (Exclusively for Super Administrator) */}
+            {(currentUser.role === 'Super Admin' || currentUser.email?.toLowerCase() === 'superadmin@gmail.com') && (
+              <button
+                onClick={onNavigateToSuperAdmin}
+                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-blue-900 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border border-blue-200/90 shadow-2xs transition-all group cursor-pointer"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-5 h-5 rounded-lg bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold shadow-xs">
+                    👑
+                  </div>
+                  <span className="font-bold text-blue-950 group-hover:text-blue-700">Super Admin Portal</span>
+                </div>
+                <span className="text-[9px] font-bold bg-blue-600 text-white px-2 py-0.5 rounded-md uppercase font-mono shadow-2xs">
+                  Master
+                </span>
+              </button>
+            )}
+
+            {/* Enterprise Settings Hub Button (Contains Datasets, Printer Calibration, License GUID, and Desktop Software) */}
             <button
-              onClick={onNavigateToViewer}
-              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-indigo-700 hover:bg-indigo-50/80 transition-all group"
+              onClick={() => {
+                if (onOpenSettings) onOpenSettings('datasets');
+                else if (onOpenCalibrationModal) onOpenCalibrationModal();
+              }}
+              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-blue-700 hover:bg-blue-50/80 transition-all group cursor-pointer"
             >
               <div className="flex items-center gap-3">
-                <Eye className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
-                <span className="font-semibold text-slate-800 group-hover:text-indigo-600">Viewer Station</span>
+                <Sliders className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
+                <span className="font-semibold text-slate-800 group-hover:text-blue-600">Enterprise Settings</span>
               </div>
-              <span className="text-[9px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded uppercase">
-                10-Pack
+              <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-mono">
+                Setup
               </span>
             </button>
-
-            {/* Dataset Manager Button */}
-            {onNavigateToDatasets && (
-              <button
-                onClick={onNavigateToDatasets}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-blue-700 hover:bg-blue-50/80 transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <FileSpreadsheet className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
-                  <span className="font-semibold text-slate-800 group-hover:text-blue-600">Dataset Manager</span>
-                </div>
-                <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase font-mono">
-                  Excel/CSV
-                </span>
-              </button>
-            )}
-
-            {/* Printer Calibration Wizard Button */}
-            {onOpenCalibrationModal && (
-              <button
-                onClick={onOpenCalibrationModal}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-amber-700 hover:bg-amber-50/80 transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <Sliders className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
-                  <span className="font-semibold text-slate-800 group-hover:text-amber-600">Printer Calibration</span>
-                </div>
-                <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded uppercase font-mono">
-                  Wizard
-                </span>
-              </button>
-            )}
-
-            {/* License & Machine Binding Button */}
-            {onNavigateToLicense && (
-              <button
-                onClick={onNavigateToLicense}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-emerald-700 hover:bg-emerald-50/80 transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 group-hover:scale-110 transition-transform" />
-                  <span className="font-semibold text-slate-800 group-hover:text-emerald-600">License & Binding</span>
-                </div>
-                <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded uppercase font-mono">
-                  GUID
-                </span>
-              </button>
-            )}
-
-            {/* Desktop Software Download Button */}
-            {onNavigateToSoftwareDownload && (
-              <button
-                onClick={onNavigateToSoftwareDownload}
-                className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-700 hover:text-blue-700 bg-gradient-to-r from-blue-50/50 to-indigo-50/50 hover:from-blue-50 hover:to-indigo-50 border border-blue-200/60 shadow-2xs transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <Laptop className="w-4 h-4 text-blue-600 group-hover:scale-110 transition-transform" />
-                  <span className="font-bold text-slate-900 group-hover:text-blue-700">Desktop Software</span>
-                </div>
-                <span className="text-[9px] font-bold bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-2 py-0.5 rounded-md uppercase font-mono flex items-center gap-1 shadow-2xs">
-                  <Download className="w-2.5 h-2.5" />
-                  v2.5
-                </span>
-              </button>
-            )}
 
             {/* My Drafts */}
             <button
               onClick={() => setActiveTab('drafts')}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeTab === 'drafts'
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${activeTab === 'drafts'
                   ? 'bg-blue-50/80 text-blue-600 border border-blue-200/80 shadow-2xs font-bold'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+                }`}
             >
               <div className="flex items-center gap-3">
                 <FileEdit className="w-4 h-4 shrink-0" />
@@ -295,11 +298,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Approved Templates */}
             <button
               onClick={() => setActiveTab('approved')}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeTab === 'approved'
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${activeTab === 'approved'
                   ? 'bg-blue-50/80 text-blue-600 border border-blue-200/80 shadow-2xs font-bold'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
+                }`}
             >
               <div className="flex items-center gap-3">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -347,15 +349,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {/* Right: User Profile & Logout */}
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-xs ring-2 ring-slate-100">
+              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs ring-2 ring-blue-100 shadow-xs">
                 {avatarLetter}
               </div>
               <div className="text-left">
                 <div className="text-xs font-bold text-slate-900 leading-tight">
                   {currentUser?.name || 'Shivam'}
                 </div>
-                <div className="text-[10px] text-slate-500 font-medium">
-                  {currentUser?.role || 'Designer'}
+                <div className="text-[10px] text-slate-500 font-medium flex items-center gap-1.5">
+                  <span>{currentUser?.email || 'admin@company.com'}</span>
+                  <span>•</span>
+                  <span className="text-blue-600 font-bold bg-blue-50 px-1.5 py-0.2 rounded">{currentUser?.role || 'Admin'}</span>
                 </div>
               </div>
             </div>
@@ -374,27 +378,74 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Scrollable Main Content Body */}
         <main className="flex-1 overflow-y-auto p-8 space-y-8">
-          {/* Main Title Banner matching screenshot */}
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              {activeTab === 'dashboard'
-                ? 'Dashboard'
-                : activeTab === 'templates'
-                ? 'Production Label Templates'
-                : activeTab === 'drafts'
-                ? 'My Drafts'
-                : 'Approved Templates'}
-            </h1>
-            <p className="text-xs text-slate-500 mt-1 font-medium">
-              {currentUser?.name || 'Shivam'} · {currentUser?.role || 'Designer'}
-            </p>
+          {/* Main Title Banner */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+                {activeTab === 'dashboard'
+                  ? 'Dashboard'
+                  : activeTab === 'templates'
+                    ? 'Production Label Templates'
+                    : activeTab === 'drafts'
+                      ? 'My Drafts'
+                      : 'Approved Templates'}
+              </h1>
+              <p className="text-xs text-slate-500 mt-1 font-medium">
+                Workspace of <span className="font-semibold text-slate-800">{currentUser?.name || 'Shivam'}</span> ({currentUser?.email || 'admin@company.com'}) · {currentUser?.department || 'Packaging Operations'}
+              </p>
+            </div>
+
+            {/* Scope Switcher Buttons */}
+            <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
+              <button
+                onClick={() => setScopeTab('my_workspace')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  scopeTab === 'my_workspace'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200/80 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>👤 My Workspace</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${scopeTab === 'my_workspace' ? 'bg-blue-600 text-white font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                  {myTemplates.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setScopeTab('enterprise_library')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  scopeTab === 'enterprise_library'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200/80 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>🏢 Sample Library</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${scopeTab === 'enterprise_library' ? 'bg-blue-600 text-white font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                  {enterpriseLibraryTemplates.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setScopeTab('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  scopeTab === 'all'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200/80 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>🌐 All</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${scopeTab === 'all' ? 'bg-blue-600 text-white font-bold' : 'bg-slate-100 text-slate-600'}`}>
+                  {templates.length}
+                </span>
+              </button>
+            </div>
           </div>
 
           {/* 4 Pastel Statistic Metric Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {/* Card 1: My Drafts (Pastel Lavender Blue) */}
             <div
-              onClick={() => setActiveTab('drafts')}
+              onClick={() => { setScopeTab('my_workspace'); setActiveTab('drafts'); }}
               className="bg-[#f1f3fd] border border-[#dce3fc] rounded-2xl p-6 transition-all hover:shadow-md cursor-pointer group"
             >
               <div className="text-xs font-semibold text-slate-600 group-hover:text-blue-700">My Drafts</div>
@@ -469,13 +520,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5 text-slate-950" />
                 <span>Approval Workflow</span>
               </button>
-              <button
-                onClick={onNavigateToViewer}
-                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
-              >
-                <Eye className="w-3.5 h-3.5" />
-                <span>Viewer Station</span>
-              </button>
+
             </div>
           </div>
 
@@ -534,11 +579,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-sm text-slate-800">
-                {activeTab === 'drafts'
-                  ? 'Your Draft Templates'
-                  : activeTab === 'approved'
-                  ? 'Approved & Ready-to-Print Templates'
-                  : 'Production Template Catalog'}
+                {scopeTab === 'my_workspace'
+                  ? `My Templates (${filteredTemplates.length})`
+                  : scopeTab === 'enterprise_library'
+                    ? `Enterprise Sample Templates (${filteredTemplates.length})`
+                    : `All Organization Templates (${filteredTemplates.length})`}
               </h3>
               <span className="text-xs text-slate-400">
                 Showing {filteredTemplates.length} of {templates.length} templates
@@ -546,16 +591,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
 
             {filteredTemplates.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
-                <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                <h4 className="text-sm font-bold text-slate-700">No matching templates found</h4>
-                <p className="text-xs text-slate-400 mt-1">Try clearing your search query or create a new template.</p>
-                <button
-                  onClick={onOpenDesigner}
-                  className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold"
-                >
-                  Create in Template Builder
-                </button>
+              <div className="bg-white rounded-2xl border border-dashed border-blue-200 p-10 text-center shadow-xs">
+                <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-blue-100 shadow-xs">
+                  <Sparkles className="w-7 h-7" />
+                </div>
+                <h4 className="text-base font-bold text-slate-900">
+                  Welcome to your Personal Workspace, {currentUser?.name || 'Administrator'}!
+                </h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto mt-2 leading-relaxed">
+                  You are logged in as <span className="font-semibold text-slate-700">{currentUser?.email}</span>. Since this is a new Admin account, you currently have 0 personal drafts.
+                </p>
+                <div className="flex items-center justify-center gap-3 mt-6 flex-wrap">
+                  <button
+                    onClick={onCreateNewTemplate || onOpenDesigner}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Create First Template in Studio</span>
+                  </button>
+                  <button
+                    onClick={() => setScopeTab('enterprise_library')}
+                    className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    <span>🏢 Browse Sample Library ({enterpriseLibraryTemplates.length})</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -577,13 +637,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                             </span>
                           )}
                           <span
-                            className={`text-[9px] uppercase font-bold px-2.5 py-0.5 rounded-full ${
-                              tmpl.status === 'published' || tmpl.status === 'approved'
+                            className={`text-[9px] uppercase font-bold px-2.5 py-0.5 rounded-full ${tmpl.status === 'published' || tmpl.status === 'approved'
                                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                 : tmpl.status === 'submitted' || tmpl.status === 'pending_level_1'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : 'bg-slate-100 text-slate-700 border border-slate-200'
-                            }`}
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
+                              }`}
                           >
                             {tmpl.status}
                           </span>
@@ -658,9 +717,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     <div key={prn.id} className="py-2.5 flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2.5">
                         <span
-                          className={`w-2 h-2 rounded-full ${
-                            prn.status === 'online' ? 'bg-emerald-500' : 'bg-amber-500'
-                          }`}
+                          className={`w-2 h-2 rounded-full ${prn.status === 'online' ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`}
                         />
                         <div>
                           <div className="font-bold text-slate-800 text-xs">{prn.name}</div>

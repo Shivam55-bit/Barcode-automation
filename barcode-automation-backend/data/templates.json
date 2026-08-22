@@ -1,114 +1,6 @@
 [
   {
-    "id": "tmpl-1787288520971",
-    "name": "Untitled Industrial Label",
-    "description": "Custom industrial barcode label",
-    "category": "Manufacturing",
-    "version": "1.1",
-    "status": "draft",
-    "dimensions": {
-      "width": 100,
-      "height": 75,
-      "unit": "mm",
-      "dpi": 300,
-      "orientation": "landscape"
-    },
-    "margins": {
-      "top": 2,
-      "right": 2,
-      "bottom": 2,
-      "left": 2,
-      "bleed": 1,
-      "safeZone": 2
-    },
-    "tags": [
-      "Custom",
-      "Direct Thermal",
-      "Draft",
-      "Draft Revision"
-    ],
-    "createdAt": "2026-08-21T05:02:00.971Z",
-    "updatedAt": "2026-08-22T05:15:07.089Z",
-    "createdBy": "Shivam",
-    "variables": [
-      {
-        "id": "v1",
-        "name": "PRODUCT_NAME",
-        "type": "static",
-        "defaultValue": "INDUSTRIAL ASSEMBLY"
-      },
-      {
-        "id": "v2",
-        "name": "SERIAL_NO",
-        "type": "counter",
-        "defaultValue": "SN-001001",
-        "counterStart": 1001
-      }
-    ],
-    "sampleRecords": [
-      {
-        "PRODUCT_NAME": "INDUSTRIAL ASSEMBLY",
-        "SERIAL_NO": "SN-001001"
-      }
-    ],
-    "elements": [
-      {
-        "id": "el-bar-1787288525592",
-        "name": "1D Barcode (CODE128)",
-        "type": "barcode",
-        "symbology": "code128",
-        "value": "10850006531238",
-        "includeText": true,
-        "textPosition": "below",
-        "barWidth": 1.5,
-        "barHeight": 16,
-        "quietZone": true,
-        "foregroundColor": "#000000",
-        "backgroundColor": "#ffffff",
-        "checkDigit": true,
-        "x": 22,
-        "y": 22,
-        "width": 37,
-        "height": 9,
-        "rotation": 0,
-        "opacity": 1,
-        "locked": false,
-        "visible": true,
-        "zIndex": 1
-      },
-      {
-        "id": "el-text-1787288532343",
-        "name": "Single Line Text 2",
-        "type": "text",
-        "textType": "single-line",
-        "text": "sdfghjk",
-        "fontFamily": "Arial",
-        "fontSize": 24,
-        "fontWeight": "bold",
-        "fontStyle": "normal",
-        "textDecoration": "none",
-        "textAlign": "left",
-        "verticalAlign": "top",
-        "color": "#000000",
-        "lineHeight": 1.2,
-        "letterSpacing": 0,
-        "multiline": false,
-        "x": 26.5,
-        "y": 50,
-        "width": 40,
-        "height": 12,
-        "rotation": 0,
-        "opacity": 1,
-        "locked": false,
-        "visible": true,
-        "zIndex": 2
-      }
-    ],
-    "approvedBy": "Shivam",
-    "approvedAt": "2026-08-21T05:03:26.944Z"
-  },
-  {
-    "id": "tmpl-1787287677929",
+    "id": "tmpl-1787385364298",
     "name": "Untitled Industrial Label",
     "description": "Custom industrial barcode label",
     "category": "Manufacturing",
@@ -133,9 +25,9 @@
       "Custom",
       "Direct Thermal"
     ],
-    "createdAt": "2026-08-21T04:47:57.929Z",
-    "updatedAt": "2026-08-21T05:01:53.306Z",
-    "createdBy": "Shivam",
+    "createdAt": "2026-08-22T07:56:04.298Z",
+    "updatedAt": "2026-08-22T08:28:16.104Z",
+    "createdBy": "shivam",
     "variables": [
       {
         "id": "v1",
@@ -157,30 +49,9 @@
         "SERIAL_NO": "SN-001001"
       }
     ],
-    "elements": []
-  },
-  {
-    "id": "test-tmpl-1787124694711",
-    "name": "API Automated Test Template",
-    "category": "Pharmaceutical",
-    "dimensions": {
-      "width": 80,
-      "height": 40,
-      "unit": "mm",
-      "dpi": 300,
-      "orientation": "landscape"
-    },
-    "margins": {
-      "top": 2,
-      "right": 2,
-      "bottom": 2,
-      "left": 2,
-      "bleed": 1,
-      "safeZone": 2
-    },
     "elements": [
       {
-        "id": "el-bar-1787285730829",
+        "id": "el-bar-1787387295765",
         "name": "1D Barcode (POSICODE-B)",
         "type": "barcode",
         "symbology": "posicode-b",
@@ -193,8 +64,8 @@
         "foregroundColor": "#000000",
         "backgroundColor": "#ffffff",
         "checkDigit": true,
-        "x": 12,
-        "y": 5.5,
+        "x": 10,
+        "y": 20,
         "width": 55,
         "height": 22,
         "rotation": 0,
@@ -202,47 +73,8 @@
         "locked": false,
         "visible": true,
         "zIndex": 1
-      },
-      {
-        "id": "el-text-1787287549992",
-        "name": "Single Line Text 2",
-        "type": "text",
-        "textType": "single-line",
-        "text": "Shivam",
-        "fontFamily": "Arial",
-        "fontSize": 10,
-        "fontWeight": "bold",
-        "fontStyle": "normal",
-        "textDecoration": "none",
-        "textAlign": "left",
-        "verticalAlign": "top",
-        "color": "#000000",
-        "lineHeight": 1.2,
-        "letterSpacing": 0,
-        "multiline": false,
-        "x": 28,
-        "y": 29.5,
-        "width": 40,
-        "height": 7,
-        "rotation": 1,
-        "opacity": 1,
-        "locked": false,
-        "visible": true,
-        "zIndex": 2
       }
-    ],
-    "status": "draft",
-    "createdAt": "2026-08-19T07:31:34.832Z",
-    "updatedAt": "2026-08-21T04:46:23.740Z",
-    "variables": [],
-    "sampleRecords": [
-      {}
-    ],
-    "tags": [
-      "Draft",
-      "Printed"
-    ],
-    "createdBy": "Shivam"
+    ]
   },
   {
     "id": "tmpl-document1-btw",
@@ -275,7 +107,7 @@
     ],
     "createdBy": "Administrator",
     "createdAt": "2026-08-14T10:00:00Z",
-    "updatedAt": "2026-08-14T18:30:00Z",
+    "updatedAt": "2026-08-22T09:25:27.156Z",
     "approvedBy": "Lead Engineer",
     "approvedAt": "2026-08-14T18:30:00Z",
     "variables": [
@@ -299,52 +131,28 @@
     ],
     "elements": [
       {
-        "id": "el-barcode-1",
-        "name": "Barcode 1",
+        "id": "el-bar-1787390704860",
+        "name": "1D Barcode (POSICODE-B)",
         "type": "barcode",
-        "symbology": "code128",
-        "value": "12345678",
+        "symbology": "posicode-b",
+        "value": "10850006531238",
         "includeText": true,
         "textPosition": "below",
-        "barWidth": 1.8,
-        "barHeight": 14,
+        "barWidth": 1.5,
+        "barHeight": 16,
         "quietZone": true,
         "foregroundColor": "#000000",
         "backgroundColor": "#ffffff",
-        "checkDigit": false,
-        "x": 10.9,
-        "y": 4.8,
-        "width": 68.6,
-        "height": 15.2,
+        "checkDigit": true,
+        "x": 24.5,
+        "y": 12.5,
+        "width": 19.5,
+        "height": 10,
         "rotation": 0,
         "opacity": 1,
         "locked": false,
         "visible": true,
         "zIndex": 1
-      },
-      {
-        "id": "el-barcode-2",
-        "name": "Barcode 3",
-        "type": "barcode",
-        "symbology": "code128",
-        "value": "12345678",
-        "includeText": true,
-        "textPosition": "below",
-        "barWidth": 1.8,
-        "barHeight": 14,
-        "quietZone": true,
-        "foregroundColor": "#000000",
-        "backgroundColor": "#ffffff",
-        "checkDigit": false,
-        "x": 10.9,
-        "y": 22.1,
-        "width": 68.6,
-        "height": 15.2,
-        "rotation": 0,
-        "opacity": 1,
-        "locked": false,
-        "visible": true,
-        "zIndex": 2
       }
     ]
   },

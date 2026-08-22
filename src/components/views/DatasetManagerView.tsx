@@ -249,11 +249,10 @@ export const DatasetManagerView: React.FC<DatasetManagerViewProps> = ({
                   <div
                     key={ds.id}
                     onClick={() => setSelectedDatasetId(ds.id)}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 ${
-                      isSelected
+                    className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 ${isSelected
                         ? 'bg-blue-600/20 border-blue-500 ring-1 ring-blue-400/40 text-white shadow-md'
                         : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-xs text-white truncate max-w-[200px]">{ds.name}</span>

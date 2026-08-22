@@ -1,5 +1,29 @@
 [
   {
+    "id": "usr-super-admin",
+    "name": "Super Administrator",
+    "email": "superadmin@gmail.com",
+    "password": "superadmin@gmail.com",
+    "role": "Super Admin",
+    "department": "Enterprise Security & Governance",
+    "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces",
+    "status": "approved",
+    "isApproved": true,
+    "createdAt": "2026-08-01T00:00:00Z",
+    "permissions": {
+      "canDesignTemplates": true,
+      "canCreateTemplates": true,
+      "canDeleteTemplates": true,
+      "canApproveWorkflow": true,
+      "canPrintAndSpool": true,
+      "canManageDatasets": true,
+      "canCalibratePrinters": true,
+      "canManageLicense": true,
+      "canDownloadDesktopApp": true,
+      "canViewAuditLogs": true
+    }
+  },
+  {
     "id": "usr-designer",
     "name": "Shivam",
     "email": "shivam@gmail.com",

@@ -14,7 +14,7 @@ import {
   DpiOption,
   UnitType,
 } from './types';
-import { INITIAL_TEMPLATES } from './services/initialTemplates';
+import { INITIAL_TEMPLATES, getUserPersonalizedTemplates } from './services/initialTemplates';
 import { INITIAL_PRINTERS, INITIAL_PRINT_JOBS, INITIAL_AUDIT_LOGS, INITIAL_USERS, INITIAL_BATCH_JOBS } from './services/mockDataService';
 import { MenuBar } from './components/menu/MenuBar';
 import { ObjectToolbar } from './components/toolbar/ObjectToolbar';
@@ -28,6 +28,8 @@ import { ViewerPrintStationView } from './components/views/ViewerPrintStationVie
 import { DatasetManagerView } from './components/views/DatasetManagerView';
 import { LicenseManagerView } from './components/views/LicenseManagerView';
 import { SoftwareDownloadView } from './components/views/SoftwareDownloadView';
+import { SuperAdminConsoleView } from './components/views/SuperAdminConsoleView';
+import { hasFeaturePermission } from './utils/permissionUtils';
 import { PrinterCalibrationModal } from './components/dialogs/PrinterCalibrationModal';
 import { LoginView } from './components/views/LoginView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -64,21 +66,6 @@ import { ZoomIn, ZoomOut, Maximize2, ShieldCheck, ChevronLeft, ChevronRight, Che
 
 export default function App() {
   // --- STATE ---
-  const [templates, setTemplates] = useState<LabelTemplate[]>(INITIAL_TEMPLATES);
-  const [currentTemplateId, setCurrentTemplateId] = useState<string>(INITIAL_TEMPLATES[0].id);
-  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
-  const [activeTool, setActiveTool] = useState<
-    'select' | 'text' | 'barcode' | 'qr' | 'datamatrix' | 'rect' | 'circle' | 'line' | 'table' | 'image'
-  >('select');
-  const [activeView, setActiveView] = useState<
-    'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer' | 'datasets' | 'license' | 'software-download'
-  >('designer');
-  const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState<boolean>(false);
-
-  // Enterprise Systems State
-  const [printers, setPrinters] = useState<PrinterDefinition[]>(INITIAL_PRINTERS);
-  const [printJobs, setPrintJobs] = useState<PrintJob[]>(INITIAL_PRINT_JOBS);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
   const [currentUser, setCurrentUser] = useState<UserProfile>(() => {
     try {
       const saved = localStorage.getItem('barcodeflow_auth_session');
@@ -86,19 +73,78 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (parsed.user) return parsed.user;
       }
-    } catch {}
-    return INITIAL_USERS[0];
+    } catch { }
+    // Default to standard Designer / Admin
+    return (
+      INITIAL_USERS.find((u) => u.email === 'shivam@gmail.com') ||
+      INITIAL_USERS[1] ||
+      INITIAL_USERS[0]
+    );
   });
+
+  const [templates, setTemplates] = useState<LabelTemplate[]>(() => {
+    try {
+      const saved = localStorage.getItem('barcodeflow_auth_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.user && parsed.user.email?.toLowerCase() !== 'shivam@gmail.com' && parsed.user.role !== 'Super Admin') {
+          const personal = getUserPersonalizedTemplates(parsed.user);
+          return [...personal, ...INITIAL_TEMPLATES];
+        }
+      }
+    } catch { }
+    return INITIAL_TEMPLATES;
+  });
+
+  const [currentTemplateId, setCurrentTemplateId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('barcodeflow_auth_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.user && parsed.user.email?.toLowerCase() !== 'shivam@gmail.com' && parsed.user.role !== 'Super Admin') {
+          const personal = getUserPersonalizedTemplates(parsed.user);
+          return personal[0].id;
+        }
+      }
+    } catch { }
+    return INITIAL_TEMPLATES[0].id;
+  });
+
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
+  const [activeTool, setActiveTool] = useState<
+    'select' | 'text' | 'barcode' | 'qr' | 'datamatrix' | 'rect' | 'circle' | 'line' | 'table' | 'image'
+  >('select');
+
+  const [activeView, setActiveView] = useState<
+    'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer' | 'datasets' | 'license' | 'software-download' | 'super-admin'
+  >(() => {
+    try {
+      const saved = localStorage.getItem('barcodeflow_auth_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.user?.role === 'Super Admin' || parsed.user?.email?.toLowerCase() === 'superadmin@gmail.com') {
+          return 'super-admin';
+        }
+      }
+    } catch { }
+    return 'dashboard';
+  });
+  const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState<boolean>(false);
+
+  // Enterprise Systems State
+  const [printers, setPrinters] = useState<PrinterDefinition[]>(INITIAL_PRINTERS);
+  const [printJobs, setPrintJobs] = useState<PrintJob[]>(INITIAL_PRINT_JOBS);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
   const [batchJobs, setBatchJobs] = useState<any[]>(INITIAL_BATCH_JOBS);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('barcodeflow_auth_session');
       if (saved) {
         const parsed = JSON.parse(saved);
-        return parsed.authenticated === true;
+        return parsed.authenticated === true && !!parsed.user;
       }
-    } catch {}
-    return true; // Keep user authenticated across page reloads and prevent auto-logout
+    } catch { }
+    return false; // Show login screen on fresh session
   });
 
   // Viewport & Canvas Settings
@@ -140,6 +186,7 @@ export default function App() {
   const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
   const [isAuditLogsOpen, setIsAuditLogsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'datasets' | 'calibration' | 'license' | 'desktop'>('datasets');
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isSerialNumberWizardOpen, setIsSerialNumberWizardOpen] = useState(false);
   const [isDateTimeWizardOpen, setIsDateTimeWizardOpen] = useState(false);
@@ -201,8 +248,18 @@ export default function App() {
         ]);
 
         if (apiTemplates.status === 'fulfilled' && apiTemplates.value?.length > 0) {
-          setTemplates(apiTemplates.value);
-          setCurrentTemplateId(apiTemplates.value[0].id);
+          setTemplates((prev) => {
+            const merged = [...prev];
+            for (const at of apiTemplates.value) {
+              const idx = merged.findIndex((m) => m.id === at.id);
+              if (idx >= 0) {
+                merged[idx] = at;
+              } else {
+                merged.push(at);
+              }
+            }
+            return merged;
+          });
         }
         if (apiPrinters.status === 'fulfilled' && apiPrinters.value?.length > 0) {
           setPrinters(apiPrinters.value);
@@ -260,9 +317,13 @@ export default function App() {
     return `${ver}.1`;
   };
 
-  // Update Template Properties with Version Freeze Auto-Branching
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Update Template Properties with Version Freeze Auto-Branching & Debounced Backend Disk Sync
   const updateTemplate = useCallback(
     (updates: Partial<LabelTemplate>) => {
+      let templateToSync: LabelTemplate | null = null;
+
       setTemplates((prev) =>
         prev.map((t) => {
           if (t.id !== currentTemplateId) return t;
@@ -283,15 +344,25 @@ export default function App() {
             };
             showToast(`Auto-created editable Draft v${nextVer} (Frozen v${t.version} remains in approval pipeline)`, 'info');
             logAction('EDIT_TEMPLATE', `Auto-branched template "${t.name}" to Draft v${nextVer} due to designer modification during active approval.`);
-            apiService.templates.save(branched).catch((err) => console.warn('API sync draft save error:', err));
+            templateToSync = branched;
             return branched;
           }
 
           const updated = { ...t, ...updates, updatedAt: new Date().toISOString() };
-          apiService.templates.save(updated).catch((err) => console.warn('API sync save error:', err));
+          templateToSync = updated;
           return updated;
         })
       );
+
+      // Debounce disk API sync so 60fps drag/move events update UI instantly without triggering disk file reload
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => {
+        if (templateToSync) {
+          apiService.templates.save(templateToSync).catch((err) => console.warn('API sync save warning:', err));
+        }
+      }, 2000);
     },
     [currentTemplateId]
   );
@@ -1005,10 +1076,15 @@ export default function App() {
     handleImportJSON();
   };
 
-  // Keyboard Shortcuts Listener
+  // Keyboard Shortcuts Listener (Strictly for Designer View)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Avoid capturing keystrokes when editing inputs
+      // Only handle shortcuts when user is actively inside the Template Designer Studio
+      if (activeView !== 'designer') {
+        return;
+      }
+
+      // Avoid capturing keystrokes when editing inputs or textboxes
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -1045,9 +1121,6 @@ export default function App() {
         } else if (e.key === 's' || e.key === 'S') {
           e.preventDefault();
           handleSaveTemplate();
-        } else if (e.key === 'q' || e.key === 'Q') {
-          e.preventDefault();
-          handleLogout();
         } else if (e.key === '=' || e.key === '+') {
           e.preventDefault();
           setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }));
@@ -1060,6 +1133,7 @@ export default function App() {
         }
       } else {
         if (e.key === 'Delete' || e.key === 'Backspace') {
+          e.preventDefault(); // Crucial: Prevent browser history back navigation
           handleDeleteSelected();
         } else if (e.key === 'v' || e.key === 'V') {
           setActiveTool('select');
@@ -1113,6 +1187,7 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
+    activeView,
     selectedElementIds,
     currentTemplate.elements,
     handleUndo,
@@ -1133,17 +1208,40 @@ export default function App() {
     setIsAuthenticated(true);
     try {
       localStorage.setItem('barcodeflow_auth_session', JSON.stringify({ authenticated: true, user }));
-    } catch {}
-    // After login, direct to BarcodeFlow Dashboard Portal (as requested)
-    setActiveView('dashboard');
-    showToast(`Welcome ${user.name}! BarcodeFlow Label Management portal loaded.`, 'success');
+    } catch { }
+
+    const isSuper = user.role === 'Super Admin' || user.email?.toLowerCase() === 'superadmin@gmail.com';
+    if (isSuper) {
+      setActiveView('super-admin');
+      showToast(`Welcome Super Administrator! Governance & Security Control Center loaded.`, 'success');
+    } else {
+      // Seed fresh personalized starter templates for newly registered/logged-in admin
+      if (user.email?.toLowerCase() !== 'shivam@gmail.com') {
+        const personalTemplates = getUserPersonalizedTemplates(user);
+        setTemplates((prev) => {
+          const userAlreadyHas = prev.some(
+            (t) =>
+              t.authorEmail?.toLowerCase() === user.email?.toLowerCase() ||
+              (t.createdBy === user.name && !t.createdBy.includes('System'))
+          );
+          if (userAlreadyHas) return prev;
+          return [...personalTemplates, ...prev];
+        });
+        if (personalTemplates.length > 0) {
+          setCurrentTemplateId(personalTemplates[0].id);
+        }
+      }
+      setActiveView('dashboard');
+      showToast(`Welcome ${user.name}! BarcodeFlow Label Management portal loaded with your personalized workspace.`, 'success');
+    }
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
+    setActiveView('dashboard');
     try {
       localStorage.removeItem('barcodeflow_auth_session');
-    } catch {}
+    } catch { }
     showToast('Signed out successfully. Please log in to continue.', 'info');
   };
 
@@ -1153,13 +1251,12 @@ export default function App() {
       <ErrorBoundary fallbackTitle="Authentication Screen Error">
         {notification && (
           <div
-            className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${
-              notification.type === 'error'
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${notification.type === 'error'
                 ? 'bg-red-600 text-white'
                 : notification.type === 'info'
-                ? 'bg-blue-600 text-white'
-                : 'bg-emerald-600 text-white'
-            }`}
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-emerald-600 text-white'
+              }`}
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>{notification.message}</span>
@@ -1176,13 +1273,12 @@ export default function App() {
       <ErrorBoundary fallbackTitle="Dashboard Workspace Error">
         {notification && (
           <div
-            className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${
-              notification.type === 'error'
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${notification.type === 'error'
                 ? 'bg-red-600 text-white'
                 : notification.type === 'info'
-                ? 'bg-blue-600 text-white'
-                : 'bg-emerald-600 text-white'
-            }`}
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-emerald-600 text-white'
+              }`}
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>{notification.message}</span>
@@ -1196,34 +1292,201 @@ export default function App() {
           currentUser={currentUser}
           allUsers={INITIAL_USERS}
           onOpenTemplate={(id) => {
+            if (!hasFeaturePermission(currentUser, 'canDesignTemplates')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Template Studio.', 'error');
+              return;
+            }
             setCurrentTemplateId(id);
             setActiveView('designer');
             showToast('Template loaded in Barcode Automation Studio', 'success');
           }}
           onOpenDesigner={() => {
+            if (!hasFeaturePermission(currentUser, 'canDesignTemplates')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Template Studio.', 'error');
+              return;
+            }
             setActiveView('designer');
             showToast('Barcode Automation Studio (Template Builder) loaded', 'success');
           }}
-          onOpenPrintCenter={() => setIsPrintDialogOpen(true)}
-          onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
-          onNavigateToWorkflow={() => setActiveView('workflow')}
-          onNavigateToViewer={() => setActiveView('viewer')}
-          onNavigateToDatasets={() => setActiveView('datasets')}
-          onNavigateToLicense={() => setActiveView('license')}
-          onNavigateToSoftwareDownload={() => setActiveView('software-download')}
-          onOpenCalibrationModal={() => setIsCalibrationModalOpen(true)}
+          onOpenPrintCenter={() => {
+            if (!hasFeaturePermission(currentUser, 'canPrintAndSpool')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Print Center.', 'error');
+              return;
+            }
+            setIsPrintDialogOpen(true);
+          }}
+          onOpenAuditLogs={() => {
+            if (!hasFeaturePermission(currentUser, 'canViewAuditLogs')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Audit Logs.', 'error');
+              return;
+            }
+            setIsAuditLogsOpen(true);
+          }}
+          onNavigateToWorkflow={() => {
+            if (!hasFeaturePermission(currentUser, 'canApproveWorkflow')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Approval Workflow.', 'error');
+              return;
+            }
+            setActiveView('workflow');
+          }}
+          onNavigateToViewer={() => {
+            if (!hasFeaturePermission(currentUser, 'canPrintAndSpool')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Viewer Station.', 'error');
+              return;
+            }
+            setActiveView('viewer');
+          }}
+          onNavigateToSuperAdmin={() => setActiveView('super-admin')}
+          onNavigateToDatasets={() => {
+            if (!hasFeaturePermission(currentUser, 'canManageDatasets')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Dataset Manager.', 'error');
+              return;
+            }
+            setSettingsInitialTab('datasets');
+            setIsSettingsOpen(true);
+          }}
+          onNavigateToLicense={() => {
+            if (!hasFeaturePermission(currentUser, 'canManageLicense')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Licensing.', 'error');
+              return;
+            }
+            setSettingsInitialTab('license');
+            setIsSettingsOpen(true);
+          }}
+          onNavigateToSoftwareDownload={() => {
+            if (!hasFeaturePermission(currentUser, 'canDownloadDesktopApp')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Desktop Software.', 'error');
+              return;
+            }
+            setSettingsInitialTab('desktop');
+            setIsSettingsOpen(true);
+          }}
+          onOpenCalibrationModal={() => {
+            if (!hasFeaturePermission(currentUser, 'canCalibratePrinters')) {
+              showToast('Permission Denied: Super Admin has restricted your access to Printer Calibration.', 'error');
+              return;
+            }
+            setSettingsInitialTab('calibration');
+            setIsSettingsOpen(true);
+          }}
+          onOpenSettings={(tab) => {
+            setSettingsInitialTab((tab as any) || 'datasets');
+            setIsSettingsOpen(true);
+          }}
           onSwitchUser={(user) => {
             setCurrentUser(user);
             showToast(`Switched active role to ${user.role} (${user.name})`, 'info');
           }}
           onLogout={handleLogout}
           onCreateNewTemplate={() => {
+            if (!hasFeaturePermission(currentUser, 'canCreateTemplates')) {
+              showToast('Permission Denied: Super Admin has restricted your access to create new templates.', 'error');
+              return;
+            }
             handleNewTemplate();
             setActiveView('designer');
           }}
-          onDuplicateTemplate={handleDuplicateTemplate}
-          onDeleteTemplate={handleDeleteTemplate}
+          onDuplicateTemplate={(id) => {
+            if (!hasFeaturePermission(currentUser, 'canCreateTemplates')) {
+              showToast('Permission Denied: Super Admin has restricted your access to duplicate templates.', 'error');
+              return;
+            }
+            handleDuplicateTemplate(id);
+          }}
+          onDeleteTemplate={(id) => {
+            if (!hasFeaturePermission(currentUser, 'canDeleteTemplates')) {
+              showToast('Permission Denied: Super Admin has restricted your access to delete templates.', 'error');
+              return;
+            }
+            handleDeleteTemplate(id);
+          }}
         />
+
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          viewport={viewport}
+          setViewport={setViewport}
+          defaultDpi={defaultDpi}
+          setDefaultDpi={setDefaultDpi}
+          printers={printers}
+          currentUser={currentUser}
+          initialTab={settingsInitialTab}
+          onSavePrinterCalibration={(updatedPrinter) => {
+            setPrinters((prev) => prev.map((p) => (p.id === updatedPrinter.id ? updatedPrinter : p)));
+            showToast(`Saved calibration for printer "${updatedPrinter.name}"!`, 'success');
+          }}
+        />
+
+        <AuditLogModal isOpen={isAuditLogsOpen} onClose={() => setIsAuditLogsOpen(false)} logs={auditLogs} />
+      </ErrorBoundary>
+    );
+  }
+
+  // Dedicated Super Admin Governance Screen - ONLY accessible by Super Admin
+  const isSuperAdminUser =
+    currentUser.role === 'Super Admin' ||
+    currentUser.email?.toLowerCase() === 'superadmin@gmail.com';
+
+  if (activeView === 'super-admin' && isSuperAdminUser) {
+    return (
+      <ErrorBoundary fallbackTitle="Super Admin Security Console Error">
+        {notification && (
+          <div
+            className={`fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${
+              notification.type === 'error'
+                ? 'bg-red-600 text-white'
+                : notification.type === 'info'
+                ? 'bg-blue-600 text-white'
+                : 'bg-emerald-600 text-white'
+            }`}
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            <span>{notification.message}</span>
+          </div>
+        )}
+        <SuperAdminConsoleView
+          currentUser={currentUser}
+          onBackToDashboard={() => setActiveView('dashboard')}
+          onOpenDesigner={() => {
+            setActiveView('designer');
+            showToast('Loaded Template Studio Designer', 'success');
+          }}
+          onOpenTemplates={() => {
+            setActiveView('dashboard');
+          }}
+          onOpenSettings={(tab) => {
+            setSettingsInitialTab((tab as any) || 'datasets');
+            setIsSettingsOpen(true);
+          }}
+          onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
+          onLogout={handleLogout}
+          onRefreshSession={async () => {
+            try {
+              const freshUsers = await apiService.users.list();
+              const me = freshUsers.find((u) => u.id === currentUser.id);
+              if (me) setCurrentUser(me);
+            } catch {}
+          }}
+        />
+
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          viewport={viewport}
+          setViewport={setViewport}
+          defaultDpi={defaultDpi}
+          setDefaultDpi={setDefaultDpi}
+          printers={printers}
+          currentUser={currentUser}
+          initialTab={settingsInitialTab}
+          onSavePrinterCalibration={(updatedPrinter) => {
+            setPrinters((prev) => prev.map((p) => (p.id === updatedPrinter.id ? updatedPrinter : p)));
+            showToast(`Saved calibration for printer "${updatedPrinter.name}"!`, 'success');
+          }}
+        />
+
+        <AuditLogModal isOpen={isAuditLogsOpen} onClose={() => setIsAuditLogsOpen(false)} logs={auditLogs} />
       </ErrorBoundary>
     );
   }
@@ -1233,13 +1496,12 @@ export default function App() {
       {/* Toast Notification Alert */}
       {notification && (
         <div
-          className={`fixed top-12 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${
-            notification.type === 'error'
+          className={`fixed top-12 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2 transition-all animate-in fade-in slide-in-from-top-2 ${notification.type === 'error'
               ? 'bg-red-600 text-white'
               : notification.type === 'info'
-              ? 'bg-blue-600 text-white'
-              : 'bg-emerald-600 text-white'
-          }`}
+                ? 'bg-blue-600 text-white'
+                : 'bg-emerald-600 text-white'
+            }`}
         >
           <CheckCircle2 className="w-4 h-4" />
           <span>{notification.message}</span>
@@ -1248,10 +1510,10 @@ export default function App() {
 
       {/* Designer Studio View (MenuBar + Toolbars + Canvas) */}
       {activeView === 'designer' && (
-        <>
+        <ErrorBoundary fallbackTitle="BarcodeFlow Designer Studio Recovery">
           <MenuBar
             onNew={handleNewTemplate}
-            onOpen={() => setActiveView('dashboard')}
+            onOpen={handleOpenTemplateFile}
             onSave={handleSaveTemplate}
             onSaveAs={async () => {
               const name = prompt('Enter new template name:', `${currentTemplate.name} (Copy)`);
@@ -1291,14 +1553,14 @@ export default function App() {
             onDelete={handleDeleteSelected}
             onSelectAll={handleSelectAll}
             onDuplicate={handleDuplicateSelected}
-            onZoomIn={() => setViewport((p) => ({ ...p, zoom: Math.min(p.zoom + 0.25, 4.0) }))}
-            onZoomOut={() => setViewport((p) => ({ ...p, zoom: Math.max(p.zoom - 0.25, 0.25) }))}
-            onZoomFit={() => setViewport((p) => ({ ...p, zoom: 1.0, panX: 40, panY: 40 }))}
-            onZoom100={() => setViewport((p) => ({ ...p, zoom: 1.0 }))}
-            onToggleGrid={() => setViewport((p) => ({ ...p, showGrid: !p.showGrid }))}
-            onToggleRulers={() => setViewport((p) => ({ ...p, showRulers: !p.showRulers }))}
-            onToggleGuides={() => setViewport((p) => ({ ...p, showGuides: !p.showGuides }))}
-            onToggleSnap={() => setViewport((p) => ({ ...p, snapToGrid: !p.snapToGrid }))}
+            onZoomIn={() => setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }))}
+            onZoomOut={() => setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, 0.25) }))}
+            onZoomFit={handleZoomFit}
+            onZoom100={() => setViewport((prev) => ({ ...prev, zoom: 1.0 }))}
+            onToggleGrid={() => setViewport((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
+            onToggleRulers={() => setViewport((prev) => ({ ...prev, showRulers: !prev.showRulers }))}
+            onToggleGuides={() => setViewport((prev) => ({ ...prev, showGuides: !prev.showGuides }))}
+            onToggleSnap={() => setViewport((prev) => ({ ...prev, snapToGrid: !prev.snapToGrid }))}
             showGrid={viewport.showGrid}
             showRulers={viewport.showRulers}
             showGuides={viewport.showGuides}
@@ -1313,8 +1575,8 @@ export default function App() {
             onInsertGS1Block={() => setIsGs1WizardOpen(true)}
             onBringToFront={handleBringToFront}
             onSendToBack={handleSendToBack}
-            onGroup={() => showToast('Elements grouped', 'info')}
-            onUngroup={() => showToast('Elements ungrouped', 'info')}
+            onGroup={() => showToast('Group elements (Selection ready)', 'info')}
+            onUngroup={() => showToast('Ungroup elements (Selection ready)', 'info')}
             onLockToggle={handleLockToggle}
             onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
             onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
@@ -1323,13 +1585,16 @@ export default function App() {
             onOpenApproval={() => setIsApprovalModalOpen(true)}
             onOpenAuditLogs={() => setIsAuditLogsOpen(true)}
             onOpenAiAssistant={() => setIsAiAssistantOpen(true)}
-            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenSettings={() => {
+              setSettingsInitialTab('general');
+              setIsSettingsOpen(true);
+            }}
             onOpenShortcuts={() => setIsShortcutsOpen(true)}
-            onOpenDataImport={() => setIsDatabaseConnectionModalOpen(true)}
+            onOpenDataImport={() => setIsCsvImportOpen(true)}
             onOpenSerialNumberWizard={() => setIsSerialNumberWizardOpen(true)}
             onOpenDateTimeWizard={() => setIsDateTimeWizardOpen(true)}
             onOpenVersionHistory={() => setIsVersionHistoryModalOpen(true)}
-            onToggleValidationInspector={() => setIsValidationInspectorOpen((p) => !p)}
+            onToggleValidationInspector={() => setIsValidationInspectorOpen(!isValidationInspectorOpen)}
             onOpenGs1Wizard={() => setIsGs1WizardOpen(true)}
             onPageSetup={() => setIsPageSetupOpen(true)}
             onOpenNamedDataSources={() => setIsNamedDataSourcesOpen(true)}
@@ -1384,177 +1649,107 @@ export default function App() {
           />
 
           <div className="flex-1 flex flex-col overflow-hidden bg-[#9fbddb]">
-          {/* BarTender Dual-Row Standard & Formatting Toolbar */}
-          <ObjectToolbar
-            activeTool={activeTool}
-            setActiveTool={setActiveTool}
-            onNew={handleNewTemplate}
-            onOpen={handleOpenTemplateFile}
-            onSave={handleSaveTemplate}
-            onPrint={() => setIsPrintDialogOpen(true)}
-            onCut={handleCut}
-            onCopy={handleCopy}
-            onPaste={handlePaste}
-            onDelete={handleDeleteSelected}
-            onUndo={handleUndo}
-            onRedo={handleRedo}
-            canUndo={historyIndex > 0}
-            canRedo={historyIndex < history.length - 1}
-            onInsertText={handleInsertText}
-            onInsertTextType={handleInsertTextType}
-            onInsertBarcode={handleInsertBarcode}
-            onInsertQR={handleInsertQR}
-            onInsertDataMatrix={handleInsertDataMatrix}
-            onInsertShape={handleInsertShape}
-            onInsertTable={handleInsertTable}
-            onInsertImage={handleInsertImage}
-            onInsertGS1Block={() => setIsGs1WizardOpen(true)}
-            onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
-            onZoomIn={() => setViewport((p) => ({ ...p, zoom: Math.min(p.zoom + 0.25, 8.0) }))}
-            onZoomOut={() => setViewport((p) => ({ ...p, zoom: Math.max(p.zoom - 0.25, 0.2) }))}
-            onZoom100={() => setViewport((p) => ({ ...p, zoom: 1.0 }))}
-            onZoomFit={handleZoomFit}
-            showGrid={viewport.showGrid}
-            onToggleGrid={() => setViewport((p) => ({ ...p, showGrid: !p.showGrid }))}
-            showRulers={viewport.showRulers}
-            onToggleRulers={() => setViewport((p) => ({ ...p, showRulers: !p.showRulers }))}
-            showGuides={viewport.showGuides}
-            onToggleGuides={() => setViewport((p) => ({ ...p, showGuides: !p.showGuides }))}
-            snapToGrid={viewport.snapToGrid}
-            onToggleSnap={() => setViewport((p) => ({ ...p, snapToGrid: !p.snapToGrid }))}
-            onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
-            selectedElement={currentTemplate.elements.find((e) => selectedElementIds.includes(e.id)) || null}
-            onUpdateSelectedElement={(updates) => {
-              const el = currentTemplate.elements.find((e) => selectedElementIds.includes(e.id));
-              if (el) updateSingleElement(el.id, updates);
-            }}
-            templateDimensions={currentTemplate.dimensions}
-            onUpdateTemplateDimensions={(dims) => {
-              updateTemplate({
-                dimensions: {
-                  ...currentTemplate.dimensions,
-                  ...dims,
-                },
-              });
-            }}
-            documentName={currentTemplate.name}
-          />
-
-          {/* Designer Main Workspace Area */}
-          <div className="flex-1 flex overflow-hidden relative">
-            {/* Left Dock Toggle Button */}
-            <button
-              title="Toggle Toolbox, Layers & Template Catalog"
-              onClick={() => setShowLeftDock(!showLeftDock)}
-              className="absolute left-0 top-1/2 -translate-y-1/2 z-30 bg-[#e4ebf5] hover:bg-white text-slate-700 border border-slate-400 p-0.5 rounded-r shadow-xs text-[10px]"
-            >
-              {showLeftDock ? '◀' : '▶'}
-            </button>
-
-            {/* Left Dock Panel: Elements Library, Layers, Variables, Data Records, Template Catalog */}
-            {showLeftDock && (
-              <LeftDockPanel
-                template={currentTemplate}
-                selectedElementIds={selectedElementIds}
-                onSelectElement={(id, multi) => {
-                  if (multi) {
-                    setSelectedElementIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-                  } else {
-                    setSelectedElementIds([id]);
-                  }
-                }}
-                onUpdateElement={updateSingleElement}
-                onReorderElements={handleReorderElements}
-                onDeleteElement={(id) => {
-                  updateElements(currentTemplate.elements.filter((el) => el.id !== id));
-                  setSelectedElementIds((prev) => prev.filter((x) => x !== id));
-                }}
-                onDuplicateElement={(id) => {
-                  const el = currentTemplate.elements.find((e) => e.id === id);
-                  if (el) {
-                    const copy = { ...el, id: `el-dup-${Date.now()}`, x: el.x + 3, y: el.y + 3 };
-                    updateElements([...currentTemplate.elements, copy]);
-                    setSelectedElementIds([copy.id]);
-                  }
-                }}
-                onInsertElement={(elPartial) => {
-                  const newEl: LabelElement = {
-                    id: `el-${Date.now()}`,
-                    name: `Element ${currentTemplate.elements.length + 1}`,
-                    type: 'text',
-                    x: 10,
-                    y: 10,
-                    width: 30,
-                    height: 10,
-                    rotation: 0,
-                    opacity: 1,
-                    locked: false,
-                    visible: true,
-                    zIndex: currentTemplate.elements.length + 1,
-                    ...elPartial,
-                  } as LabelElement;
-                  updateElements([...currentTemplate.elements, newEl]);
-                  setSelectedElementIds([newEl.id]);
-                }}
-                onInsertPreset={handleInsertPreset}
-                onSelectTemplate={(id) => setCurrentTemplateId(id)}
-                templatesList={templates}
-                onAddVariable={(v) => updateTemplate({ variables: [...currentTemplate.variables, v] })}
-                onUpdateVariable={(id, upd) =>
-                  updateTemplate({
-                    variables: currentTemplate.variables.map((v) => (v.id === id ? { ...v, ...upd } : v)),
-                  })
+            {/* BarTender Dual-Row Standard & Formatting Toolbar */}
+            <ObjectToolbar
+              activeTool={activeTool}
+              setActiveTool={setActiveTool}
+              onNew={handleNewTemplate}
+              onOpen={handleOpenTemplateFile}
+              onSave={handleSaveTemplate}
+              onPrint={() => setIsPrintDialogOpen(true)}
+              onCut={handleCut}
+              onCopy={handleCopy}
+              onPaste={handlePaste}
+              onDelete={handleDeleteSelected}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              canUndo={historyIndex > 0}
+              canRedo={historyIndex < history.length - 1}
+              onInsertText={handleInsertText}
+              onInsertTextType={handleInsertTextType}
+              onInsertBarcode={handleInsertBarcode}
+              onInsertQR={handleInsertQR}
+              onInsertDataMatrix={handleInsertDataMatrix}
+              onInsertShape={handleInsertShape}
+              onInsertTable={handleInsertTable}
+              onInsertImage={handleInsertImage}
+              onInsertGS1Block={() => setIsGs1WizardOpen(true)}
+              onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
+              onZoomIn={() => setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }))}
+              onZoomOut={() => setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, 0.25) }))}
+              onZoom100={() => setViewport((prev) => ({ ...prev, zoom: 1.0 }))}
+              onZoomFit={handleZoomFit}
+              showGrid={viewport.showGrid}
+              onToggleGrid={() => setViewport((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
+              showRulers={viewport.showRulers}
+              onToggleRulers={() => setViewport((prev) => ({ ...prev, showRulers: !prev.showRulers }))}
+              showGuides={viewport.showGuides}
+              onToggleGuides={() => setViewport((prev) => ({ ...prev, showGuides: !prev.showGuides }))}
+              snapToGrid={viewport.snapToGrid}
+              onToggleSnap={() => setViewport((prev) => ({ ...prev, snapToGrid: !prev.snapToGrid }))}
+              onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
+              selectedElement={currentTemplate.elements.find((e) => selectedElementIds.includes(e.id))}
+              onUpdateSelectedElement={(updates) => {
+                if (selectedElementIds.length > 0) {
+                  updateSingleElement(selectedElementIds[0], updates);
                 }
-                onDeleteVariable={(id) =>
-                  updateTemplate({ variables: currentTemplate.variables.filter((v) => v.id !== id) })
-                }
-                onImportCSV={() => setIsCsvImportOpen(true)}
-                currentRecordIndex={viewport.previewRecordIndex}
-                onSelectRecordIndex={(idx) => setViewport((p) => ({ ...p, previewRecordIndex: idx }))}
-                onClose={() => setShowLeftDock(false)}
-              />
-            )}
+              }}
+              templateDimensions={currentTemplate.dimensions}
+              onUpdateTemplateDimensions={(dims) => {
+                updateTemplate({
+                  dimensions: {
+                    ...currentTemplate.dimensions,
+                    ...dims,
+                  },
+                });
+              }}
+              documentName={currentTemplate.name}
+            />
 
-            {/* Central Precision Interactive Canvas & Bottom Database Stepper */}
-            <div className="flex-1 flex flex-col overflow-hidden relative">
-              <div className="flex-1 overflow-hidden relative">
-                <DesignerCanvas
+            {/* Designer Main Workspace Area */}
+            <div className="flex-1 flex overflow-hidden relative">
+              {/* Left Dock Toggle Button */}
+              <button
+                title="Toggle Toolbox, Layers & Template Catalog"
+                onClick={() => setShowLeftDock(!showLeftDock)}
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-30 bg-[#e4ebf5] hover:bg-white text-slate-700 border border-slate-400 p-0.5 rounded-r shadow-xs text-[10px]"
+              >
+                {showLeftDock ? '◀' : '▶'}
+              </button>
+
+              {/* Left Dock Panel: Elements Library, Layers, Variables, Data Records, Template Catalog */}
+              {showLeftDock && (
+                <LeftDockPanel
                   template={currentTemplate}
                   selectedElementIds={selectedElementIds}
-                  onSelectElements={setSelectedElementIds}
-                  onUpdateElement={updateSingleElement}
-                  onUpdateMultipleElements={updateMultipleElements}
-                  onDeleteSelected={handleDeleteSelected}
-                  onDuplicateSelected={handleDuplicateSelected}
-                  onCut={handleCut}
-                  onCopy={handleCopy}
-                  onPaste={handlePaste}
-                  onUndo={handleUndo}
-                  onRedo={handleRedo}
-                  onBringToFront={handleBringToFront}
-                  onSendToBack={handleSendToBack}
-                  onLockToggle={handleLockToggle}
-                  onOpenProperties={() => {
-                    const selEl = currentTemplate.elements.find((e) => selectedElementIds.includes(e.id));
-                    if (selEl) {
-                      if (selEl.type === 'barcode') setIsBarcodePropertiesOpen(true);
-                      else if (selEl.type === 'text') setIsTextPropertiesOpen(true);
-                      else if (selEl.type === 'shape') setIsShapePropertiesOpen(true);
-                      else setShowRightDock(true);
+                  onSelectElement={(id, multi) => {
+                    if (multi) {
+                      setSelectedElementIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
                     } else {
-                      setIsPageSetupOpen(true);
+                      setSelectedElementIds([id]);
                     }
                   }}
-                  onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
-                  onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
-                  onOpenPageSetup={() => setIsPageSetupOpen(true)}
-                  onInsertElementAt={(elPartial, xMm, yMm) => {
+                  onUpdateElement={updateSingleElement}
+                  onReorderElements={handleReorderElements}
+                  onDeleteElement={(id) => {
+                    updateElements(currentTemplate.elements.filter((el) => el.id !== id));
+                    setSelectedElementIds((prev) => prev.filter((x) => x !== id));
+                  }}
+                  onDuplicateElement={(id) => {
+                    const el = currentTemplate.elements.find((e) => e.id === id);
+                    if (el) {
+                      const copy = { ...el, id: `el-dup-${Date.now()}`, x: el.x + 3, y: el.y + 3 };
+                      updateElements([...currentTemplate.elements, copy]);
+                      setSelectedElementIds([copy.id]);
+                    }
+                  }}
+                  onInsertElement={(elPartial) => {
                     const newEl: LabelElement = {
                       id: `el-${Date.now()}`,
                       name: `Element ${currentTemplate.elements.length + 1}`,
                       type: 'text',
-                      x: xMm,
-                      y: yMm,
+                      x: 10,
+                      y: 10,
                       width: 30,
                       height: 10,
                       rotation: 0,
@@ -1566,86 +1761,159 @@ export default function App() {
                     } as LabelElement;
                     updateElements([...currentTemplate.elements, newEl]);
                     setSelectedElementIds([newEl.id]);
-                    showToast(`Added ${newEl.name} at (${xMm.toFixed(1)}, ${yMm.toFixed(1)}) mm`, 'success');
                   }}
-                  onInsertPresetAt={(presetKey, xMm, yMm) => {
-                    handleInsertPreset(presetKey);
-                  }}
-                  viewport={viewport}
-                  setViewport={setViewport}
-                  recordData={currentRecordData}
-                  onCursorMove={(xMm, yMm) => setCursorPos({ x: xMm, y: yMm })}
+                  onInsertPreset={handleInsertPreset}
+                  onSelectTemplate={(id) => setCurrentTemplateId(id)}
+                  templatesList={templates}
+                  onAddVariable={(v) => updateTemplate({ variables: [...currentTemplate.variables, v] })}
+                  onUpdateVariable={(id, upd) =>
+                    updateTemplate({
+                      variables: currentTemplate.variables.map((v) => (v.id === id ? { ...v, ...upd } : v)),
+                    })
+                  }
+                  onDeleteVariable={(id) =>
+                    updateTemplate({ variables: currentTemplate.variables.filter((v) => v.id !== id) })
+                  }
+                  onImportCSV={() => setIsCsvImportOpen(true)}
+                  currentRecordIndex={viewport.previewRecordIndex}
+                  onSelectRecordIndex={(idx) => setViewport((p) => ({ ...p, previewRecordIndex: idx }))}
+                  onClose={() => setShowLeftDock(false)}
                 />
+              )}
 
-                {/* Validation & Compliance Problem Inspector */}
-                <ValidationInspectorPanel
-                  template={currentTemplate}
-                  isOpen={isValidationInspectorOpen}
-                  onClose={() => setIsValidationInspectorOpen(false)}
-                  onSelectElement={(id) => {
-                    setSelectedElementIds([id]);
-                    setShowRightDock(true);
-                  }}
-                  onAutoFix={(issue) => {
-                    if (issue.category === 'Print Boundary' && issue.elementId) {
-                      const el = currentTemplate.elements.find(e => e.id === issue.elementId);
-                      if (el) {
-                        const safe = currentTemplate.margins.safeZone || 1;
-                        const newX = Math.max(safe, Math.min(currentTemplate.dimensions.width - el.width - safe, el.x));
-                        const newY = Math.max(safe, Math.min(currentTemplate.dimensions.height - el.height - safe, el.y));
-                        updateSingleElement(el.id, { x: newX, y: newY });
-                        showToast(`Fitted "${el.name}" inside printable safe margins`, 'success');
+              {/* Central Precision Interactive Canvas & Bottom Database Stepper */}
+              <div className="flex-1 flex flex-col overflow-hidden relative">
+                <div className="flex-1 overflow-hidden relative">
+                  <DesignerCanvas
+                    template={currentTemplate}
+                    selectedElementIds={selectedElementIds}
+                    onSelectElements={setSelectedElementIds}
+                    onUpdateElement={updateSingleElement}
+                    onUpdateMultipleElements={updateMultipleElements}
+                    onDeleteSelected={handleDeleteSelected}
+                    onDuplicateSelected={handleDuplicateSelected}
+                    onCut={handleCut}
+                    onCopy={handleCopy}
+                    onPaste={handlePaste}
+                    onUndo={handleUndo}
+                    onRedo={handleRedo}
+                    onBringToFront={handleBringToFront}
+                    onSendToBack={handleSendToBack}
+                    onLockToggle={handleLockToggle}
+                    onOpenProperties={() => {
+                      const selEl = currentTemplate.elements.find((e) => selectedElementIds.includes(e.id));
+                      if (selEl) {
+                        if (selEl.type === 'barcode') setIsBarcodePropertiesOpen(true);
+                        else if (selEl.type === 'text') setIsTextPropertiesOpen(true);
+                        else if (selEl.type === 'shape') setIsShapePropertiesOpen(true);
+                        else setShowRightDock(true);
+                      } else {
+                        setIsPageSetupOpen(true);
                       }
-                    } else if (issue.category === 'GS1 Compliance' && issue.elementId) {
-                      const el = currentTemplate.elements.find(e => e.id === issue.elementId) as any;
-                      if (el && el.value) {
-                        const clean = el.value.replace(/\D/g, '');
-                        if (clean.length >= 8) {
-                          const body = clean.slice(0, -1);
-                          const cd = calculateGS1CheckDigit(body);
-                          updateSingleElement(el.id, { value: `${body}${cd}` });
-                          showToast(`Recalculated Modulo 10 check digit for "${el.name}"`, 'success');
+                    }}
+                    onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
+                    onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
+                    onOpenPageSetup={() => setIsPageSetupOpen(true)}
+                    onInsertElementAt={(elPartial, xMm, yMm) => {
+                      const newEl: LabelElement = {
+                        id: `el-${Date.now()}`,
+                        name: `Element ${currentTemplate.elements.length + 1}`,
+                        type: 'text',
+                        x: xMm,
+                        y: yMm,
+                        width: 30,
+                        height: 10,
+                        rotation: 0,
+                        opacity: 1,
+                        locked: false,
+                        visible: true,
+                        zIndex: currentTemplate.elements.length + 1,
+                        ...elPartial,
+                      } as LabelElement;
+                      updateElements([...currentTemplate.elements, newEl]);
+                      setSelectedElementIds([newEl.id]);
+                      showToast(`Added ${newEl.name} at (${xMm.toFixed(1)}, ${yMm.toFixed(1)}) mm`, 'success');
+                    }}
+                    onInsertPresetAt={(presetKey, xMm, yMm) => {
+                      handleInsertPreset(presetKey);
+                    }}
+                    viewport={viewport}
+                    setViewport={setViewport}
+                    recordData={currentRecordData}
+                    onCursorMove={(xMm, yMm) => setCursorPos({ x: xMm, y: yMm })}
+                  />
+
+                  {/* Validation & Compliance Problem Inspector */}
+                  <ValidationInspectorPanel
+                    template={currentTemplate}
+                    isOpen={isValidationInspectorOpen}
+                    onClose={() => setIsValidationInspectorOpen(false)}
+                    onSelectElement={(id) => {
+                      setSelectedElementIds([id]);
+                      setShowRightDock(true);
+                    }}
+                    onAutoFix={(issue) => {
+                      if (issue.category === 'Print Boundary' && issue.elementId) {
+                        const el = currentTemplate.elements.find(e => e.id === issue.elementId);
+                        if (el) {
+                          const safe = currentTemplate.margins.safeZone || 1;
+                          const newX = Math.max(safe, Math.min(currentTemplate.dimensions.width - el.width - safe, el.x));
+                          const newY = Math.max(safe, Math.min(currentTemplate.dimensions.height - el.height - safe, el.y));
+                          updateSingleElement(el.id, { x: newX, y: newY });
+                          showToast(`Fitted "${el.name}" inside printable safe margins`, 'success');
+                        }
+                      } else if (issue.category === 'GS1 Compliance' && issue.elementId) {
+                        const el = currentTemplate.elements.find(e => e.id === issue.elementId) as any;
+                        if (el && el.value) {
+                          const clean = el.value.replace(/\D/g, '');
+                          if (clean.length >= 8) {
+                            const body = clean.slice(0, -1);
+                            const cd = calculateGS1CheckDigit(body);
+                            updateSingleElement(el.id, { value: `${body}${cd}` });
+                            showToast(`Calculated & corrected GS1 Modulo-10 Check Digit (${cd})`, 'success');
+                          }
                         }
                       }
-                    }
-                  }}
-                  activeRecord={currentRecordData}
+                    }}
+                    activeRecord={currentRecordData}
+                  />
+                </div>
+
+                {/* Bottom Database Record Navigator */}
+                <RecordNavigationBar
+                  template={currentTemplate}
+                  currentRecordIndex={viewport.previewRecordIndex}
+                  totalRecords={currentTemplate.sampleRecords.length}
+                  onSelectRecordIndex={(idx) => setViewport((v) => ({ ...v, previewRecordIndex: idx }))}
+                  onImportCSV={() => setIsCsvImportOpen(true)}
+                  onOpenDataConnector={() => setIsDatabaseConnectionModalOpen(true)}
                 />
               </div>
 
-              {/* Bottom Database Record Navigator Bar */}
-              <RecordNavigationBar
-                connection={currentTemplate.databaseConnection}
-                currentIndex={viewport.previewRecordIndex}
-                onSelectIndex={(idx) => setViewport((p) => ({ ...p, previewRecordIndex: idx }))}
-                onOpenDatabaseModal={() => setIsDatabaseConnectionModalOpen(true)}
-              />
+              {/* Right Dock Toggle Button */}
+              <button
+                title="Toggle Element Properties & Page Setup"
+                onClick={() => setShowRightDock(!showRightDock)}
+                className="absolute right-0 top-1/2 -translate-y-1/2 z-30 bg-[#e4ebf5] hover:bg-white text-slate-700 border border-slate-400 p-0.5 rounded-l shadow-xs text-[10px]"
+              >
+                {showRightDock ? '▶' : '◀'}
+              </button>
+
+              {/* Right Dock Panel: Selected Element & Template Properties */}
+              {showRightDock && (
+                <RightDockPanel
+                  template={currentTemplate}
+                  selectedElementIds={selectedElementIds}
+                  onUpdateTemplate={updateTemplate}
+                  onUpdateElement={updateSingleElement}
+                  onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
+                  onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
+                  onClose={() => setShowRightDock(false)}
+                />
+              )}
             </div>
-
-            {/* Right Dock Toggle Button */}
-            <button
-              title="Toggle Object & Template Properties Panel"
-              onClick={() => setShowRightDock(!showRightDock)}
-              className="absolute right-8 top-1/2 -translate-y-1/2 z-30 bg-[#e4ebf5] hover:bg-white text-slate-700 border border-slate-400 p-0.5 rounded-l shadow-xs text-[10px]"
-            >
-              {showRightDock ? '▶' : '◀'}
-            </button>
-
-            {/* Right Dock Panel: Selected Element & Template Properties */}
-            {showRightDock && (
-              <RightDockPanel
-                template={currentTemplate}
-                selectedElementIds={selectedElementIds}
-                onUpdateTemplate={updateTemplate}
-                onUpdateElement={updateSingleElement}
-                onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
-                onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
-                onClose={() => setShowRightDock(false)}
-              />
-            )}
           </div>
-        </div>
-        </>
+        </ErrorBoundary>
       )}
 
       {/* Alternative Enterprise Views */}
@@ -1737,10 +2005,10 @@ export default function App() {
                   prev.map((t) =>
                     t.id === templateId
                       ? {
-                          ...t,
-                          status: 'pending_level_1',
-                          updatedAt: new Date().toISOString(),
-                        }
+                        ...t,
+                        status: 'pending_level_1',
+                        updatedAt: new Date().toISOString(),
+                      }
                       : t
                   )
                 );
@@ -1771,12 +2039,12 @@ export default function App() {
                   prev.map((t) =>
                     t.id === templateId
                       ? {
-                          ...t,
-                          status,
-                          approvedBy: eSignature || currentUser.name,
-                          approvedAt: new Date().toISOString(),
-                          updatedAt: new Date().toISOString(),
-                        }
+                        ...t,
+                        status,
+                        approvedBy: eSignature || currentUser.name,
+                        approvedAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                      }
                       : t
                   )
                 );
@@ -1816,10 +2084,10 @@ export default function App() {
                   prev.map((t) =>
                     t.id === templateId
                       ? {
-                          ...t,
-                          status: 'draft',
-                          updatedAt: new Date().toISOString(),
-                        }
+                        ...t,
+                        status: 'draft',
+                        updatedAt: new Date().toISOString(),
+                      }
                       : t
                   )
                 );
@@ -1877,7 +2145,7 @@ export default function App() {
           onPrintBatch={async (jobId, pageSelection, printerId) => {
             const targetJob = batchJobs.find((j) => j.id === jobId);
             const targetPrinter = printers.find((p) => p.id === printerId);
-            
+
             // Mark job as printed
             setBatchJobs((prev) =>
               prev.map((j) => (j.id === jobId ? { ...j, status: 'printed', printedAt: new Date().toLocaleString(), printedBy: currentUser.name } : j))
@@ -1944,6 +2212,20 @@ export default function App() {
           currentUser={currentUser}
           onBackToDashboard={() => setActiveView('dashboard')}
           onNavigateToLicense={() => setActiveView('license')}
+        />
+      )}
+
+      {activeView === 'super-admin' && (
+        <SuperAdminConsoleView
+          currentUser={currentUser}
+          onBackToDashboard={() => setActiveView('dashboard')}
+          onRefreshSession={async () => {
+            try {
+              const freshUsers = await apiService.users.list();
+              const me = freshUsers.find((u) => u.id === currentUser.id);
+              if (me) setCurrentUser(me);
+            } catch {}
+          }}
         />
       )}
 
@@ -2088,6 +2370,13 @@ export default function App() {
         setViewport={setViewport}
         defaultDpi={defaultDpi}
         setDefaultDpi={setDefaultDpi}
+        printers={printers}
+        currentUser={currentUser}
+        initialTab={settingsInitialTab}
+        onSavePrinterCalibration={(updatedPrinter) => {
+          setPrinters((prev) => prev.map((p) => (p.id === updatedPrinter.id ? updatedPrinter : p)));
+          showToast(`Saved calibration for printer "${updatedPrinter.name}"!`, 'success');
+        }}
       />
 
       <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
@@ -2100,29 +2389,29 @@ export default function App() {
           (currentTemplate.elements.find((e) => selectedElementIds.includes(e.id) && e.type === 'barcode') ||
             currentTemplate.elements.find((e) => e.type === 'barcode') ||
             currentTemplate.elements.find((e) => selectedElementIds.includes(e.id)) || {
-              id: 'el-default-bc',
-              name: 'Barcode 3',
-              type: 'barcode',
-              symbology: 'code128',
-              value: '12345678',
-              includeText: true,
-              textPosition: 'below',
-              barWidth: 1.5,
-              barHeight: 16,
-              quietZone: true,
-              foregroundColor: '#000000',
-              backgroundColor: '#ffffff',
-              checkDigit: true,
-              x: 10,
-              y: 20,
-              width: 55,
-              height: 22,
-              rotation: 0,
-              opacity: 1,
-              locked: false,
-              visible: true,
-              zIndex: 1,
-            }) as any
+            id: 'el-default-bc',
+            name: 'Barcode 3',
+            type: 'barcode',
+            symbology: 'code128',
+            value: '12345678',
+            includeText: true,
+            textPosition: 'below',
+            barWidth: 1.5,
+            barHeight: 16,
+            quietZone: true,
+            foregroundColor: '#000000',
+            backgroundColor: '#ffffff',
+            checkDigit: true,
+            x: 10,
+            y: 20,
+            width: 55,
+            height: 22,
+            rotation: 0,
+            opacity: 1,
+            locked: false,
+            visible: true,
+            zIndex: 1,
+          }) as any
         }
         onUpdateElement={(id, updates) => {
           updateSingleElement(id, updates);

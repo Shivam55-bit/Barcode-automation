@@ -51,11 +51,13 @@ export function createBackendApp(): express.Application {
   app.use('/api/audit-logs', auditLogsRouter);
   app.use('/api/users', usersRouter);
   app.use('/api/auth', usersRouter);
+  app.use('/api/admin/users', usersRouter);
   app.use('/api/gs1', gs1Router);
   app.use('/api/zpl', zplRouter);
   app.use('/api/ai', aiRouter);
   app.use('/api/viewer', viewerLogsRouter);
   app.use('/api/datasets', datasetsRouter);
+  app.use('/api/data-sources', datasetsRouter);
   app.use('/api/license', licenseRouter);
   app.use('/api/export', exportRouter);
   app.use('/api/software', softwareRouter);

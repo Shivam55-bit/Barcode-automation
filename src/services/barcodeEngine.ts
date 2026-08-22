@@ -388,6 +388,17 @@ export const SYMBOLOGY_CATALOG: SymbologyMetadata[] = [
     is2D: false,
     supportsGS1: false,
   },
+  {
+    id: 'posicode-b',
+    name: 'PosiCode B',
+    category: 'General Purpose',
+    folderCategories: ['General Purpose', 'All Symbologies'],
+    bwipBcId: 'posicode',
+    description: 'PosiCode variant B with variable length.',
+    defaultSample: '12345678',
+    is2D: false,
+    supportsGS1: false,
+  },
 ];
 
 export function getSymbologyMetadata(symbology: BarcodeSymbology): SymbologyMetadata {

@@ -173,13 +173,12 @@ export const PrintQueueView: React.FC<PrintQueueViewProps> = ({
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
                           <div
-                            className={`h-full ${
-                              job.status === 'completed'
+                            className={`h-full ${job.status === 'completed'
                                 ? 'bg-emerald-500'
                                 : job.status === 'failed'
-                                ? 'bg-red-500'
-                                : 'bg-blue-500'
-                            }`}
+                                  ? 'bg-red-500'
+                                  : 'bg-blue-500'
+                              }`}
                             style={{ width: `${job.progressPercent}%` }}
                           />
                         </div>

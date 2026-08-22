@@ -37,7 +37,22 @@ export type BarcodeSymbology =
   | 'usps-imb'
   | 'royalmail';
 
-export type UserRole = 'Designer' | 'Approver Level 1' | 'Approver Level 2' | 'Admin' | 'Viewer / Print Operator';
+export type UserRole = 'Super Admin' | 'Admin' | 'Designer' | 'Approver Level 1' | 'Approver Level 2' | 'Viewer / Print Operator';
+
+export type UserStatus = 'pending_approval' | 'approved' | 'rejected' | 'suspended';
+
+export interface AdminFeaturePermissions {
+  canDesignTemplates: boolean;      // Studio / Template Builder
+  canCreateTemplates: boolean;      // New Template / Save As
+  canDeleteTemplates: boolean;      // Delete Template
+  canApproveWorkflow: boolean;      // 21 CFR Part 11 Approval Workflow
+  canPrintAndSpool: boolean;        // Print Center & Batch Spooler
+  canManageDatasets: boolean;       // Excel/CSV Dataset Manager
+  canCalibratePrinters: boolean;    // Printer Calibration Wizard
+  canManageLicense: boolean;        // License & Hardware Machine GUID
+  canDownloadDesktopApp: boolean;   // Desktop Software .exe Download
+  canViewAuditLogs: boolean;        // View 21 CFR Part 11 Audit Trail
+}
 
 export type TemplateStatus = 
   | 'draft' 
@@ -725,9 +740,16 @@ export interface UserProfile {
   id: string;
   name: string;
   email: string;
-  role: UserRole | 'Admin' | 'Label Designer' | 'Quality Reviewer' | 'Print Operator' | 'Auditor';
+  password?: string;
+  role: UserRole | string;
   department: string;
   avatar: string;
+  status?: UserStatus;
+  isApproved?: boolean;
+  createdAt?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+  permissions?: AdminFeaturePermissions;
 }
 
 export interface CanvasGuide {

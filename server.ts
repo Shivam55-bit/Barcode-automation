@@ -30,7 +30,12 @@ async function startServer() {
     console.log(`[Server] Starting live Vite development middleware...`);
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        watch: {
+          ignored: ['**/data/**', '**/barcode-automation-backend/data/**'],
+        },
+      },
       appType: 'spa',
     });
     app.use((req, res, next) => {
