@@ -62,6 +62,12 @@ export function createBackendApp(): express.Application {
   app.use('/api/export', exportRouter);
   app.use('/api/software', softwareRouter);
   app.use('/api/admin/software', softwareRouter);
+  app.use('/download', softwareRouter);
+
+  // Direct download handler for /download/*.exe static URL alias
+  app.get('/download/:filename', (req, res) => {
+    res.redirect('/api/software/download?v=2.5.0');
+  });
 
   // Sample Enterprise Datasets
   app.get('/api/database/sample-datasets', (req, res) => {

@@ -39,7 +39,7 @@ async function startServer() {
       appType: 'spa',
     });
     app.use((req, res, next) => {
-      if (req.path.startsWith('/api')) {
+      if (req.path.startsWith('/api') || req.path.startsWith('/download')) {
         return next();
       }
       vite.middlewares(req, res, next);

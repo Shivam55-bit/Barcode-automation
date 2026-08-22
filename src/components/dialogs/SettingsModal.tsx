@@ -735,7 +735,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <a
-                  href="/download/BarcodeFlow_Setup_v2.5.0.exe"
+                  href="/api/software/download?v=2.5.0"
                   download="BarcodeFlow_Setup_v2.5.0.exe"
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md transition-all cursor-pointer"
                 >
