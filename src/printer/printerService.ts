@@ -176,13 +176,23 @@ export class PrinterService {
       }
     }
 
-    // 2. Add Virtual Generic Label Printers (Clearly marked isVirtual: true for designing without physical printer)
-    const virtuals = VERIFIED_PRINTER_PROFILES.filter((p) => p.isVirtual);
-    virtuals.forEach((vp) => {
-      if (!printers.some((p) => p.id === vp.id)) {
-        printers.push({ ...vp });
-      }
-    });
+    // 2. Populate Virtual & Verified Profiles
+    if (!this.isElectron()) {
+      // In Web Browser environment (no native Windows spooler access), include all verified industrial models & virtuals
+      VERIFIED_PRINTER_PROFILES.forEach((vp) => {
+        if (!printers.some((p) => p.id === vp.id)) {
+          printers.push({ ...vp });
+        }
+      });
+    } else {
+      // In Electron Desktop environment, include virtual generic presets alongside real Windows discovered printers
+      const virtuals = VERIFIED_PRINTER_PROFILES.filter((p) => p.isVirtual);
+      virtuals.forEach((vp) => {
+        if (!printers.some((p) => p.id === vp.id)) {
+          printers.push({ ...vp });
+        }
+      });
+    }
 
     // 3. Determine single real default printer
     const realDefault = printers.find((p) => !p.isVirtual && p.isDefault) || null;
