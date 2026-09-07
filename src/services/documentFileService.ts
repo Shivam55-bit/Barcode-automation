@@ -281,6 +281,20 @@ export async function checkFileExistsOnDisk(filePath: string): Promise<boolean> 
 }
 
 /**
+ * Opens file location in Windows Explorer / OS file manager.
+ */
+export async function openFileLocationOnDisk(filePath: string): Promise<boolean> {
+  const electronAPI = (window as any).electronAPI;
+  if (electronAPI?.openDocumentLocation) {
+    return await electronAPI.openDocumentLocation(filePath);
+  }
+  if (electronAPI?.openExcelLocation) {
+    return await electronAPI.openExcelLocation(filePath);
+  }
+  return false;
+}
+
+/**
  * Exits the application cleanly.
  */
 export async function exitDesktopApplication(): Promise<void> {

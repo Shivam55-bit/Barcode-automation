@@ -523,6 +523,21 @@ function registerDocumentIpc() {
     }
   });
 
+  // 6. Open Document Folder in Windows Explorer
+  ipcMain.handle('document:open-location', async (_event, filePath: string) => {
+    if (!filePath) return false;
+    try {
+      const resolvedPath = path.normalize(path.resolve(filePath));
+      if (fs.existsSync(resolvedPath)) {
+        shell.showItemInFolder(resolvedPath);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  });
+
   // 6. Native App Exit
   ipcMain.handle('app:exit', async () => {
     app.quit();

@@ -5,7 +5,7 @@ import { CanvasElement } from './CanvasElement';
 import { ContextMenu } from './ContextMenu';
 import { RightVerticalToolbar } from './RightVerticalToolbar';
 import { DocumentTabBar } from './DocumentTabBar';
-import { Printer, Plus, ZoomIn, ZoomOut, Target, Maximize2 } from 'lucide-react';
+import { Printer, Plus, ZoomIn, ZoomOut, Target, Maximize2, FileText, FolderOpen } from 'lucide-react';
 
 interface DesignerCanvasProps {
   template: LabelTemplate;
@@ -46,6 +46,7 @@ interface DesignerCanvasProps {
   onCloseTab?: (instanceId: string) => void;
   onNewTemplate?: () => void;
   onNewForm?: () => void;
+  onOpenDocument?: () => void;
   onSaveDoc?: (instanceId: string) => void;
   onSaveAll?: () => void;
   onDuplicateDoc?: (instanceId: string) => void;
@@ -532,6 +533,45 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       onUpdateElement(el.id, { rotation: ((el.rotation || 0) + deltaDeg) % 360 });
     });
   };
+
+  if (documents && documents.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col bg-[#9fbddb] select-none h-full relative overflow-hidden">
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-16 h-16 bg-white/50 border border-white/80 rounded-2xl flex items-center justify-center mb-4 shadow-sm backdrop-blur-xs">
+            <FileText className="w-8 h-8 text-slate-700" />
+          </div>
+          <h3 className="text-base font-bold text-slate-900 mb-1">No document is open</h3>
+          <p className="text-xs text-slate-700 mb-6 max-w-sm">
+            Create a new BarcodeFlow label template or open an existing file to start designing.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onNewTemplate}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md text-xs font-bold shadow-sm flex items-center gap-2 transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Document</span>
+            </button>
+            {onOpenDocument && (
+              <button
+                onClick={onOpenDocument}
+                className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 rounded-md text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <FolderOpen className="w-4 h-4 text-emerald-700" />
+                <span>Open Document...</span>
+              </button>
+            )}
+          </div>
+        </div>
+        {/* Bottom Status Bar */}
+        <div className="h-5 bg-[#e4ebf5] border-t border-[#cbd5e1] flex items-center justify-between px-2 text-[10.5px] text-slate-600">
+          <span>Ready</span>
+          <span>BarcodeFlow Enterprise Suite v2.5.0</span>
+        </div>
+      </div>
+    );
+  }
 
   const labelWidthPx = template.dimensions.width * scale;
   const labelHeightPx = template.dimensions.height * scale;

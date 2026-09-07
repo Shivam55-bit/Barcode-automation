@@ -71,6 +71,7 @@ import { ExcelConnectWizardModal } from './components/dialogs/ExcelConnectWizard
 import { RecordBrowserModal } from './components/dialogs/RecordBrowserModal';
 import { NewDocumentWizardModal } from './components/wizard/NewDocumentWizardModal';
 import { PrinterManagerModal } from './components/dialogs/PrinterManagerModal';
+import { WelcomeModal } from './components/dialogs/WelcomeModal';
 
 import { exportLabelsToPDF } from './services/pdfExportService';
 import { generateZPL } from './services/zplEngine';
@@ -300,7 +301,39 @@ export default function App() {
   const [isRefreshingRecords, setIsRefreshingRecords] = useState<boolean>(false);
 
   // --- MULTI-DOCUMENT WORKSPACE STATE ---
+  const [showWelcomeOnStartup, setShowWelcomeOnStartup] = useState<boolean>(() => {
+    try {
+      const val = localStorage.getItem('barcodeflow.showWelcomeOnStartup');
+      return val === null ? true : val === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  const [isWelcomeOpen, setIsWelcomeOpen] = useState<boolean>(() => {
+    try {
+      const val = localStorage.getItem('barcodeflow.showWelcomeOnStartup');
+      return val === null ? true : val === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleShowWelcomeOnStartup = useCallback((enabled: boolean) => {
+    setShowWelcomeOnStartup(enabled);
+    try {
+      localStorage.setItem('barcodeflow.showWelcomeOnStartup', String(enabled));
+    } catch { }
+  }, []);
+
   const [openDocuments, setOpenDocuments] = useState<OpenDocument[]>(() => {
+    try {
+      const welcomeVal = localStorage.getItem('barcodeflow.showWelcomeOnStartup');
+      const showWelcome = welcomeVal === null ? true : welcomeVal === 'true';
+      if (showWelcome) {
+        return []; // Clean workspace when welcome dialog is active on startup
+      }
+    } catch { }
     const initTpl = INITIAL_TEMPLATES[0];
     return [
       {
@@ -320,7 +353,7 @@ export default function App() {
   });
 
   const [activeDocumentInstanceId, setActiveDocumentInstanceId] = useState<string>(() => {
-    return openDocuments[0]?.instanceId || 'doc-1';
+    return openDocuments[0]?.instanceId || '';
   });
 
   const [unsavedDocModal, setUnsavedDocModal] = useState<{
@@ -2926,6 +2959,8 @@ export default function App() {
           printers={printers}
           currentUser={currentUser}
           initialTab={settingsInitialTab}
+          showWelcomeOnStartup={showWelcomeOnStartup}
+          onToggleShowWelcomeOnStartup={handleToggleShowWelcomeOnStartup}
           onSavePrinterCalibration={(updatedPrinter) => {
             setPrinters((prev) => prev.map((p) => (p.id === updatedPrinter.id ? updatedPrinter : p)));
             showToast(`Saved calibration for printer "${updatedPrinter.name}"!`, 'success');
@@ -3036,6 +3071,11 @@ export default function App() {
             onSaveAs={() => handleSaveDocumentAs(activeDocumentInstanceId)}
             onPrintPreview={() => setIsPrintDialogOpen(true)}
             onOpenDatabaseConnection={() => setIsExcelWizardOpen(true)}
+            onOpenWelcome={() => setIsWelcomeOpen(true)}
+            onOpenPreferences={() => {
+              setSettingsInitialTab('general');
+              setIsSettingsOpen(true);
+            }}
             recentDocuments={recentDocuments}
             onOpenRecentDocument={handleOpenRecentDocument}
             onClearRecentDocuments={handleClearRecentDocuments}
@@ -3406,6 +3446,7 @@ export default function App() {
                       onCloseOthers={handleCloseOthers}
                       onCloseAll={handleCloseAll}
                       activePrinterName={activePrinter?.name || defaultPrinter?.name || 'Microsoft Print to PDF'}
+                      onOpenDocument={handleOpenDocumentFile}
                     />
                   )}
 
@@ -4646,6 +4687,19 @@ export default function App() {
         onPrinterSelected={(p) => {
           showToast(`Selected printer: ${p.name}`, 'info');
         }}
+      />
+
+      {/* BarcodeFlow Desktop Startup & Welcome Dialog */}
+      <WelcomeModal
+        isOpen={isWelcomeOpen}
+        onClose={() => setIsWelcomeOpen(false)}
+        onNewDocument={() => setIsNewDocWizardOpen(true)}
+        onOpenExisting={handleOpenDocumentFile}
+        onOpenRecentDocument={handleOpenRecentDocument}
+        recentDocuments={recentDocuments}
+        onRefreshRecent={() => setRecentDocuments(getRecentDocuments())}
+        showWelcomeOnStartup={showWelcomeOnStartup}
+        onToggleShowWelcomeOnStartup={handleToggleShowWelcomeOnStartup}
       />
     </div>
   );

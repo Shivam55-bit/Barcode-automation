@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('document:read-file', filePath),
   checkFileExists: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('document:check-file-exists', filePath),
+  openDocumentLocation: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('document:open-location', filePath),
   exitApp: (): Promise<boolean> =>
     ipcRenderer.invoke('app:exit'),
 });

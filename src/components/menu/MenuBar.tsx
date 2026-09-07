@@ -58,6 +58,8 @@ interface MenuBarProps {
   onSaveAll?: () => void;
   onPrintPreview?: () => void;
   onOpenDatabaseConnection?: () => void;
+  onOpenWelcome?: () => void;
+  onOpenPreferences?: () => void;
   recentDocuments?: any[];
   onOpenRecentDocument?: (filePath: string) => void;
   onClearRecentDocuments?: () => void;
@@ -266,6 +268,13 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                     onClick={() => executeAction(props.onCloseAllDocuments)}
                   />
                 )}
+                {props.onOpenWelcome && (
+                  <MenuItem
+                    icon={<Sparkles className="w-3.5 h-3.5 text-amber-500" />}
+                    label="Welcome / Start Page..."
+                    onClick={() => executeAction(props.onOpenWelcome)}
+                  />
+                )}
                 <MenuDivider />
                 <MenuItem
                   icon={<Save className="w-3.5 h-3.5 text-blue-700" />}
@@ -433,8 +442,8 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                   onClick={() => executeAction(props.onPaste)}
                 />
                 <MenuItem
-                  icon={<Copy className="w-3.5 h-3.5 text-indigo-600" />}
-                  label="Duplicate Object"
+                  icon={<Copy className="w-3.5 h-3.5 text-slate-600" />}
+                  label="Duplicate"
                   shortcut="Ctrl+D"
                   onClick={() => executeAction(props.onDuplicate)}
                 />
@@ -446,9 +455,16 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                 />
                 <MenuDivider />
                 <MenuItem
+                  icon={<CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />}
                   label="Select All"
                   shortcut="Ctrl+A"
                   onClick={() => executeAction(props.onSelectAll)}
+                />
+                <MenuDivider />
+                <MenuItem
+                  icon={<Sliders className="w-3.5 h-3.5 text-slate-700" />}
+                  label="Preferences..."
+                  onClick={() => executeAction(props.onOpenPreferences || props.onOpenSettings)}
                 />
               </div>
             )}
@@ -996,6 +1012,13 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                   shortcut="F1"
                   onClick={() => executeAction(props.onOpenShortcuts)}
                 />
+                {props.onOpenWelcome && (
+                  <MenuItem
+                    icon={<Sparkles className="w-3.5 h-3.5 text-amber-500" />}
+                    label="Welcome Screen..."
+                    onClick={() => executeAction(props.onOpenWelcome)}
+                  />
+                )}
                 <MenuItem
                   icon={<ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />}
                   label="About BarCode Automation Studio"

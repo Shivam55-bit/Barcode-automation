@@ -44,6 +44,8 @@ interface SettingsModalProps {
   currentUser?: UserProfile;
   onSavePrinterCalibration?: (printer: PrinterDefinition) => void;
   initialTab?: 'general' | 'datasets' | 'calibration' | 'license' | 'desktop';
+  showWelcomeOnStartup?: boolean;
+  onToggleShowWelcomeOnStartup?: (enabled: boolean) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -56,6 +58,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   currentUser,
   onSavePrinterCalibration,
   initialTab = 'datasets',
+  showWelcomeOnStartup,
+  onToggleShowWelcomeOnStartup,
 }) => {
   const canDatasets = hasFeaturePermission(currentUser, 'canManageDatasets');
   const canCalib = hasFeaturePermission(currentUser, 'canCalibratePrinters');
@@ -828,6 +832,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span>Show Safe Margins</span>
                   </label>
                 </div>
+              </div>
+
+              {/* Startup Preferences */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <label className="text-xs font-semibold text-slate-700 block">Startup & Application Behavior</label>
+                <label className="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 cursor-pointer hover:bg-slate-100">
+                  <input
+                    type="checkbox"
+                    checked={showWelcomeOnStartup ?? true}
+                    onChange={(e) => onToggleShowWelcomeOnStartup?.(e.target.checked)}
+                    className="rounded text-blue-600"
+                  />
+                  <span>Show Welcome / Start Page dialog when BarcodeFlow starts</span>
+                </label>
               </div>
             </div>
           )}
