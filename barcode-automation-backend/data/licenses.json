@@ -1,0 +1,23 @@
+[
+  {
+    "licenseKey": "BCF-ENT-9921-8840",
+    "status": "active",
+    "tier": "Enterprise Suite",
+    "registeredTo": "Shivam Enterprise Administrator",
+    "organization": "BarcodeFlow Industrial Systems Inc.",
+    "machineGuid": "BB4F183E65B112A63C6420B3",
+    "maxPrinters": 99,
+    "maxUsers": 50,
+    "activatedAt": "2026-07-23T05:08:49.068Z",
+    "expiresAt": "2027-07-23T05:08:49.068Z",
+    "features": [
+      "Unlimited Desktop Installations",
+      "Offline Mode & Local Datasets",
+      "21 CFR Part 11 Electronic Signatures",
+      "ZPL II / EPL2 Native Thermal Spooling",
+      "Pixel-Perfect Vector PDF Engine",
+      "10,000+ Record Batch Serialization",
+      "Machine-Bound Hardware GUID Verification"
+    ]
+  }
+]

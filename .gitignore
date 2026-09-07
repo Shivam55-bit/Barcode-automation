@@ -1,0 +1,15 @@
+node_modules/
+build/
+dist/
+dist-electron/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+scratch/
+*.sqlite-wal
+*.sqlite-shm
+**/watch_folders/processed/*
+**/watch_folders/error/*
+dist-electron-build/

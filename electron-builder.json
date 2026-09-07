@@ -1,0 +1,34 @@
+{
+  "appId": "com.barcodeflow.enterprise",
+  "productName": "BarcodeFlow Enterprise Suite",
+  "directories": {
+    "output": "dist-electron-build"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "barcode-automation-backend/dist/**/*",
+    "barcode-automation-backend/data/**/*",
+    "barcode-automation-backend/src/**/*",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,README,test,tests,example,examples}",
+    "!**/*.ts",
+    "!**/*.map",
+    "!dist-electron-build/**/*"
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "artifactName": "BarcodeFlow_Setup.exe"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "BarcodeFlow Enterprise Suite"
+  }
+}

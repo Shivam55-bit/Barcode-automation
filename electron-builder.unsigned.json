@@ -1,0 +1,13 @@
+{
+  "extends": "./electron-builder.json",
+  "win": {
+    "signAndEditExecutable": false,
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "artifactName": "BarcodeFlow_Setup_Dev_Unsigned.exe"
+  }
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "tok-1788605871438",
+    "name": "Automated Test Token",
+    "tokenHash": "4a17bfa645fcbc1d2377a9dfed9a77b8644a3ad7e84c231b6168ad750c21838e",
+    "prefix": "bf_1293b...",
+    "role": "Operator",
+    "scopes": [
+      "print:execute",
+      "datasets:read"
+    ],
+    "createdAt": "2026-09-05T10:57:51.438Z",
+    "expiresAt": "2026-10-05T10:57:51.438Z",
+    "lastUsedAt": "2026-09-05T10:57:51.451Z",
+    "isActive": true
+  },
+  {
+    "id": "tok-1788605937634",
+    "name": "Automated Test Token",
+    "tokenHash": "cd99517b38b19d2ed46c4605721f55d2f4e29e86be72d93f7aba76c1bd452c81",
+    "prefix": "bf_c26f9...",
+    "role": "Operator",
+    "scopes": [
+      "print:execute",
+      "datasets:read"
+    ],
+    "createdAt": "2026-09-05T10:58:57.634Z",
+    "expiresAt": "2026-10-05T10:58:57.634Z",
+    "lastUsedAt": "2026-09-05T10:58:57.645Z",
+    "isActive": true
+  },
+  {
+    "id": "tok-1788606866282",
+    "name": "Automated Test Token",
+    "tokenHash": "2ad98879ee2d936dd95960ebede8f42cb5a17ce313a772e875fa90ced7dc0969",
+    "prefix": "bf_bc9cd...",
+    "role": "Operator",
+    "scopes": [
+      "print:execute",
+      "datasets:read"
+    ],
+    "createdAt": "2026-09-05T11:14:26.282Z",
+    "expiresAt": "2026-10-05T11:14:26.282Z",
+    "lastUsedAt": "2026-09-05T11:14:26.291Z",
+    "isActive": true
+  }
+]

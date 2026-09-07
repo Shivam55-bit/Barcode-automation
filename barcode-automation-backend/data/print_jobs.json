@@ -1,0 +1,110 @@
+[
+  {
+    "id": "job-auto-1788605871420-915",
+    "templateId": "tmpl-document1-btw",
+    "templateName": "Document1.btw",
+    "totalLabels": 3,
+    "copies": 1,
+    "printerName": "Default Enterprise Printer",
+    "status": "completed",
+    "submittedBy": "FolderWatcher Automation Daemon",
+    "submittedAt": "2026-09-05T10:57:51.420Z",
+    "sourceFile": "erp_production_1788605871115.csv",
+    "records": [
+      {
+        "SKU": "AUTO-5501",
+        "Batch_Lot": "LOT-8812",
+        "Expiry_Date": "2027-01-31",
+        "Product_Name": "Industrial Solvent 5L",
+        "Net_Weight": "4.85 kg"
+      },
+      {
+        "SKU": "AUTO-5502",
+        "Batch_Lot": "LOT-8812",
+        "Expiry_Date": "2027-01-31",
+        "Product_Name": "Industrial Solvent 5L",
+        "Net_Weight": "4.87 kg"
+      },
+      {
+        "SKU": "AUTO-5503",
+        "Batch_Lot": "LOT-8813",
+        "Expiry_Date": "2027-02-15",
+        "Product_Name": "Industrial Solvent 10L",
+        "Net_Weight": "9.80 kg"
+      }
+    ],
+    "bytesWritten": 231
+  },
+  {
+    "id": "job-auto-1788605937617-456",
+    "templateId": "tmpl-document1-btw",
+    "templateName": "Document1.btw",
+    "totalLabels": 3,
+    "copies": 1,
+    "printerName": "Default Enterprise Printer",
+    "status": "completed",
+    "submittedBy": "FolderWatcher Automation Daemon",
+    "submittedAt": "2026-09-05T10:58:57.617Z",
+    "sourceFile": "erp_production_1788605937313.csv",
+    "records": [
+      {
+        "SKU": "AUTO-5501",
+        "Batch_Lot": "LOT-8812",
+        "Expiry_Date": "2027-01-31",
+        "Product_Name": "Industrial Solvent 5L",
+        "Net_Weight": "4.85 kg"
+      },
+      {
+        "SKU": "AUTO-5502",
+        "Batch_Lot": "LOT-8812",
+        "Expiry_Date": "2027-01-31",
+        "Product_Name": "Industrial Solvent 5L",
+        "Net_Weight": "4.87 kg"
+      },
+      {
+        "SKU": "AUTO-5503",
+        "Batch_Lot": "LOT-8813",
+        "Expiry_Date": "2027-02-15",
+        "Product_Name": "Industrial Solvent 10L",
+        "Net_Weight": "9.80 kg"
+      }
+    ],
+    "bytesWritten": 231
+  },
+  {
+    "id": "job-auto-1788606866262-954",
+    "templateId": "tmpl-document1-btw",
+    "templateName": "Document1.btw",
+    "totalLabels": 3,
+    "copies": 1,
+    "printerName": "Default Enterprise Printer",
+    "status": "completed",
+    "submittedBy": "FolderWatcher Automation Daemon",
+    "submittedAt": "2026-09-05T11:14:26.262Z",
+    "sourceFile": "erp_production_1788606864260.csv",
+    "records": [
+      {
+        "SKU": "AUTO-5501",
+        "Batch_Lot": "LOT-8812",
+        "Expiry_Date": "2027-01-31",
+        "Product_Name": "Industrial Solvent 5L",
+        "Net_Weight": "4.85 kg"
+      },
+      {
+        "SKU": "AUTO-5502",
+        "Batch_Lot": "LOT-8812",
+        "Expiry_Date": "2027-01-31",
+        "Product_Name": "Industrial Solvent 5L",
+        "Net_Weight": "4.87 kg"
+      },
+      {
+        "SKU": "AUTO-5503",
+        "Batch_Lot": "LOT-8813",
+        "Expiry_Date": "2027-02-15",
+        "Product_Name": "Industrial Solvent 10L",
+        "Net_Weight": "9.80 kg"
+      }
+    ],
+    "bytesWritten": 231
+  }
+]
