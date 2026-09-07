@@ -51,8 +51,17 @@ interface MenuBarProps {
   onNew: () => void;
   onOpenPrinterManager?: () => void;
   onOpen: () => void;
+  onCloseDocument?: () => void;
+  onCloseAllDocuments?: () => void;
   onSave: () => void;
   onSaveAs: () => void;
+  onSaveAll?: () => void;
+  onPrintPreview?: () => void;
+  onOpenDatabaseConnection?: () => void;
+  recentDocuments?: any[];
+  onOpenRecentDocument?: (filePath: string) => void;
+  onClearRecentDocuments?: () => void;
+  onExitApp?: () => void;
   onExportPDF: () => void;
   onExportZPL: () => void;
   onExportJSON: () => void;
@@ -144,19 +153,20 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleMenuClick = (menuName: string) => {
+  const toggleMenu = (menuName: string) => {
     setOpenMenu(openMenu === menuName ? null : menuName);
   };
+  const handleMenuClick = toggleMenu;
 
   const handleMenuHover = (menuName: string) => {
-    if (openMenu !== null) {
+    if (openMenu !== null && openMenu !== menuName) {
       setOpenMenu(menuName);
     }
   };
 
-  const executeAction = (action: () => void) => {
-    action();
+  const executeAction = (action?: () => void) => {
     setOpenMenu(null);
+    if (action) action();
   };
 
   return (
@@ -213,22 +223,22 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
       {/* 2. Menu Bar (Classic BarTender Style) */}
       <div
         ref={menuBarRef}
-        className="flex items-center justify-between h-6 bg-[#f0f2f5] text-slate-800 text-[11.5px] px-1 border-b border-[#d8dfe8] relative z-50 whitespace-nowrap shrink-0 overflow-visible"
+        className="flex items-center justify-between h-7 px-2 bg-gradient-to-b from-[#f0f4fc] to-[#e2ebf7] border-b border-[#a0b8cf] text-slate-800 select-none text-[11.5px] font-sans shadow-2xs relative z-40"
       >
-        <div className="flex items-center shrink-0 overflow-visible">
-          {/* FILE MENU */}
+        <div className="flex items-center gap-0.5">
+          {/* FILE MENU (BarTender Windows Architecture) */}
           <div className="relative">
             <button
-              onClick={() => handleMenuClick('file')}
+              onClick={() => toggleMenu('file')}
               onMouseEnter={() => handleMenuHover('file')}
-              className={`px-2 py-0.5 rounded-xs transition-colors ${
-                openMenu === 'file' ? 'bg-[#cce0f5] text-blue-900' : 'hover:bg-[#e0e6ed] text-slate-800'
+              className={`px-2 py-0.5 rounded-xs transition-colors cursor-pointer ${
+                openMenu === 'file' ? 'bg-[#3399ff] text-white shadow-2xs' : 'hover:bg-[#dbe8f5] text-slate-800'
               }`}
             >
               File
             </button>
             {openMenu === 'file' && (
-              <div className="absolute left-0 top-full mt-0.5 w-60 bg-white border border-[#b8c5d6] shadow-lg py-1 z-50 text-slate-800 text-[11.5px]">
+              <div className="absolute left-0 top-full mt-0.5 w-64 bg-white border border-[#b8c5d6] shadow-xl py-1 z-50 text-slate-800 text-[11.5px] rounded-xs">
                 <MenuItem
                   icon={<FileText className="w-3.5 h-3.5 text-blue-600" />}
                   label="New..."
@@ -241,9 +251,24 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                   shortcut="Ctrl+O"
                   onClick={() => executeAction(props.onOpen)}
                 />
+                {props.onCloseDocument && (
+                  <MenuItem
+                    icon={<X className="w-3.5 h-3.5 text-slate-500" />}
+                    label="Close"
+                    shortcut="Ctrl+F4"
+                    onClick={() => executeAction(props.onCloseDocument)}
+                  />
+                )}
+                {props.onCloseAllDocuments && (
+                  <MenuItem
+                    icon={<X className="w-3.5 h-3.5 text-slate-400" />}
+                    label="Close All"
+                    onClick={() => executeAction(props.onCloseAllDocuments)}
+                  />
+                )}
                 <MenuDivider />
                 <MenuItem
-                  icon={<Save className="w-3.5 h-3.5 text-blue-600" />}
+                  icon={<Save className="w-3.5 h-3.5 text-blue-700" />}
                   label="Save"
                   shortcut="Ctrl+S"
                   onClick={() => executeAction(props.onSave)}
@@ -253,6 +278,53 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                   label="Save As..."
                   shortcut="Ctrl+Shift+S"
                   onClick={() => executeAction(props.onSaveAs)}
+                />
+                {props.onSaveAll && (
+                  <MenuItem
+                    icon={<Save className="w-3.5 h-3.5 text-indigo-600" />}
+                    label="Save All"
+                    onClick={() => executeAction(props.onSaveAll)}
+                  />
+                )}
+                <MenuDivider />
+                {(props.onOpenExcelWizard || props.onOpenDatabaseConnection) && (
+                  <MenuItem
+                    icon={<Database className="w-3.5 h-3.5 text-emerald-600" />}
+                    label="Database Connection Setup..."
+                    onClick={() => executeAction(props.onOpenExcelWizard || props.onOpenDatabaseConnection)}
+                  />
+                )}
+                {props.onPageSetup && (
+                  <MenuItem
+                    icon={<Layers className="w-3.5 h-3.5 text-blue-600" />}
+                    label="Page Setup..."
+                    shortcut="Ctrl+D"
+                    onClick={() => executeAction(props.onPageSetup)}
+                  />
+                )}
+                <MenuItem
+                  icon={<Eye className="w-3.5 h-3.5 text-purple-600" />}
+                  label="Print Preview"
+                  shortcut="Ctrl+R"
+                  onClick={() => executeAction(props.onPrintPreview || props.onOpenPrintDialog)}
+                />
+                <MenuItem
+                  icon={<Printer className="w-3.5 h-3.5 text-blue-700" />}
+                  label="Print..."
+                  shortcut="Ctrl+P"
+                  onClick={() => executeAction(props.onOpenPrintDialog)}
+                />
+                {props.onOpenPrinterManager && (
+                  <MenuItem
+                    icon={<Printer className="w-3.5 h-3.5 text-indigo-600" />}
+                    label="Printers & Hardware Setup..."
+                    onClick={() => executeAction(props.onOpenPrinterManager)}
+                  />
+                )}
+                <MenuItem
+                  icon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />}
+                  label="Print Station Batch Spooler..."
+                  onClick={() => executeAction(props.onOpenBatchPrint)}
                 />
                 <MenuDivider />
                 <MenuItem
@@ -268,52 +340,48 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                 />
                 <MenuItem
                   icon={<Download className="w-3.5 h-3.5 text-slate-600" />}
-                  label="Export Document (.btw / JSON)..."
+                  label="Export Document (.bfl / JSON)..."
                   onClick={() => executeAction(props.onExportJSON)}
                 />
                 <MenuItem
                   icon={<Upload className="w-3.5 h-3.5 text-slate-600" />}
-                  label="Import Document (.btw / JSON)..."
+                  label="Import Document (.bfl / JSON)..."
                   onClick={() => executeAction(props.onImportJSON)}
                 />
-                <MenuDivider />
-                {props.onPageSetup && (
-                  <MenuItem
-                    icon={<Layers className="w-3.5 h-3.5 text-blue-600" />}
-                    label="Page Setup (Dimensions, Margins, Stock)..."
-                    shortcut="Ctrl+D"
-                    onClick={() => executeAction(props.onPageSetup!)}
-                  />
-                )}
-                {props.onOpenPrinterManager && (
-                  <MenuItem
-                    icon={<Printer className="w-3.5 h-3.5 text-indigo-600" />}
-                    label="Printers & Hardware Setup..."
-                    onClick={() => executeAction(props.onOpenPrinterManager!)}
-                  />
-                )}
-                <MenuItem
-                  icon={<Printer className="w-3.5 h-3.5 text-blue-700" />}
-                  label="Print..."
-                  shortcut="Ctrl+P"
-                  onClick={() => executeAction(props.onOpenPrintDialog)}
-                />
-                <MenuItem
-                  icon={<FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />}
-                  label="Print Station Batch Spooler..."
-                  onClick={() => executeAction(props.onOpenBatchPrint)}
-                />
-                {props.onLogout && (
+                {/* RECENT DOCUMENTS (BarTender Reference) */}
+                {props.recentDocuments && props.recentDocuments.length > 0 && (
                   <>
                     <MenuDivider />
-                    <MenuItem
-                      icon={<LogOut className="w-3.5 h-3.5 text-red-600" />}
-                      label="Log Out / Exit Session"
-                      shortcut="Ctrl+Q"
-                      onClick={() => executeAction(props.onLogout)}
-                    />
+                    <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                      Recent Documents
+                    </div>
+                    {props.recentDocuments.slice(0, 5).map((rec: any, idx: number) => (
+                      <MenuItem
+                        key={rec.filePath}
+                        icon={<FileText className="w-3 h-3 text-slate-400" />}
+                        label={`${idx + 1}  ${rec.fileName || rec.filePath}`}
+                        title={rec.filePath}
+                        onClick={() => executeAction(() => props.onOpenRecentDocument?.(rec.filePath))}
+                      />
+                    ))}
+                    {props.onClearRecentDocuments && (
+                      <button
+                        type="button"
+                        onClick={() => executeAction(props.onClearRecentDocuments)}
+                        className="w-full text-left px-7 py-1 text-[10px] text-slate-400 hover:text-red-600 hover:bg-slate-50 transition-colors"
+                      >
+                        Clear Recent Documents List
+                      </button>
+                    )}
                   </>
                 )}
+                <MenuDivider />
+                <MenuItem
+                  icon={<LogOut className="w-3.5 h-3.5 text-red-600" />}
+                  label="Exit"
+                  shortcut="Ctrl+Q"
+                  onClick={() => executeAction(props.onExitApp || props.onLogout)}
+                />
               </div>
             )}
           </div>
@@ -996,14 +1064,16 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
 const MenuItem: React.FC<{
   icon?: React.ReactNode;
   label: string;
+  title?: string;
   shortcut?: string;
   disabled?: boolean;
   checked?: boolean;
   onClick: () => void;
-}> = ({ icon, label, shortcut, disabled, checked, onClick }) => {
+}> = ({ icon, label, title, shortcut, disabled, checked, onClick }) => {
   return (
     <button
       disabled={disabled}
+      title={title}
       onClick={onClick}
       className={`w-full flex items-center justify-between px-3 py-1 text-left select-none hover:bg-[#cce0f5] hover:text-blue-950 transition-colors ${
         disabled ? 'opacity-40 cursor-not-allowed hover:bg-transparent' : 'cursor-pointer text-slate-800'

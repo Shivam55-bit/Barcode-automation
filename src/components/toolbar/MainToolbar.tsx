@@ -101,7 +101,7 @@ export const MainToolbar: React.FC<MainToolbarProps> = (props) => {
             <Save className="w-4 h-4" />
           </button>
         </Tooltip>
-        <Tooltip content="Save Copy / Duplicate">
+        <Tooltip content="Save As..." shortcut="Ctrl+Shift+S">
           <button
             onClick={props.onSaveAs}
             className="p-1.5 rounded hover:bg-slate-200 active:bg-slate-300 transition-colors text-slate-700"

@@ -11,6 +11,7 @@ import { BUILTIN_STOCK_PRESETS } from '../../printer/mediaService';
 import { PrinterService } from '../../printer/printerService';
 import { LabelTemplate, LabelElement } from '../../types';
 import { PageSetupModal } from '../dialogs/PageSetupModal';
+import { WizardLabelRollPreview } from './WizardLabelRollPreview';
 import { X, Check, AlertTriangle } from 'lucide-react';
 
 interface NewDocumentWizardModalProps {
@@ -108,27 +109,6 @@ export const NewDocumentWizardModal: React.FC<NewDocumentWizardModalProps> = ({
       loadPrinters();
     }
   }, [isOpen]);
-
-  // Keyboard shortcuts: Enter = Next, Escape = Cancel
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      } else if (e.key === 'Enter' && !e.shiftKey) {
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON') return;
-        e.preventDefault();
-        if (currentStep < 12 && isCurrentStepValid) {
-          setCurrentStep((prev) => prev + 1);
-        } else if (currentStep === 12) {
-          handleFinishWizard();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, currentStep]);
 
   const loadPrinters = async () => {
     setIsLoadingPrinters(true);
@@ -419,6 +399,27 @@ export const NewDocumentWizardModal: React.FC<NewDocumentWizardModalProps> = ({
     onClose();
   };
 
+  // Keyboard shortcuts: Enter = Next, Escape = Cancel
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON') return;
+        e.preventDefault();
+        if (currentStep < 12 && isCurrentStepValid) {
+          setCurrentStep((prev) => prev + 1);
+        } else if (currentStep === 12) {
+          handleFinishWizard();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, currentStep, isCurrentStepValid, handleFinishWizard]);
+
   const stepMeta = [
     { title: 'Starting Point', desc: 'Select the starting point for the new document.' },
     { title: 'Printer Selection', desc: 'Specify the printer to use with this document.' },
@@ -434,13 +435,41 @@ export const NewDocumentWizardModal: React.FC<NewDocumentWizardModalProps> = ({
     { title: 'Finish Wizard', desc: 'Ready to create document and open in Designer.' },
   ];
 
+  const renderLivePreview = () => (
+    <WizardLabelRollPreview
+      pageWidthMm={pageWidthMm}
+      pageHeightMm={pageHeightMm}
+      labelWidthMm={labelWidthMm}
+      labelHeightMm={labelHeightMm}
+      rows={rows}
+      columns={columns}
+      labelShape={labelShape}
+      cornerRadiusMm={cornerRadiusMm}
+      selectedMediaType={selectedMediaType}
+      orientation={orientation}
+      marginTop={marginTop}
+      marginLeft={marginLeft}
+      marginRight={marginRight}
+      marginBottom={marginBottom}
+      horizontalGapMm={horizontalGapMm}
+      verticalGapMm={verticalGapMm}
+      startingPoint={startingPoint}
+      selectedTemplateId={selectedTemplateId}
+      printCorner={printCorner}
+      printDirection={printDirection}
+      useBgColor={useBgColor}
+      bgColor={bgColor}
+      unit={unit}
+    />
+  );
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 select-none">
-      {/* Exact Native Windows Dialog Container (680px × 510px, responsive on smaller screens) */}
+      {/* Exact Native Windows Dialog Container (720px × 525px, responsive on smaller screens) */}
       <div
-        className="w-[680px] max-w-[96vw] h-[510px] max-h-[92vh] bg-[#f0f0f0] border border-[#7a7a7a] rounded-[3px] shadow-[0_10px_35px_rgba(0,0,0,0.35)] flex flex-col overflow-hidden text-[11px] text-[#000000]"
+        className="w-[720px] max-w-[96vw] h-[525px] max-h-[94vh] bg-[#f0f0f0] border border-[#7a7a7a] rounded-[3px] shadow-[0_10px_35px_rgba(0,0,0,0.35)] flex flex-col overflow-hidden text-[11px] text-[#000000]"
         style={{ fontFamily: '"Segoe UI", Tahoma, Arial, sans-serif' }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -795,404 +824,503 @@ export const NewDocumentWizardModal: React.FC<NewDocumentWizardModalProps> = ({
             </div>
           )}
 
-          {/* STEP 3: Stock Selection (Matches 3rd screenshot exactly) */}
+          {/* STEP 3: Stock Selection */}
           {currentStep === 3 && (
-            <div className="space-y-3">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                A Stock specifies the size of the page, and the size, number, and position of the items on the page. You may select a predefined Stock or specify your own custom settings.
-              </p>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-3">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  A Stock specifies the size of the page, and the size, number, and position of the items on the page. You may select a predefined Stock or specify your own custom settings.
+                </p>
 
-              <div className="pt-2 space-y-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="stockMode"
-                    checked={stockMode === 'custom'}
-                    onChange={() => setStockMode('custom')}
-                    className="accent-[#0078d7]"
-                  />
-                  <span className="text-[11px] text-[#000000]">Specify Custom Settings</span>
-                </label>
-
-                <div className="space-y-2">
+                <div className="pt-1 space-y-2">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="radio"
                       name="stockMode"
-                      checked={stockMode === 'predefined'}
-                      onChange={() => setStockMode('predefined')}
+                      checked={stockMode === 'custom'}
+                      onChange={() => setStockMode('custom')}
                       className="accent-[#0078d7]"
                     />
-                    <span className="text-[11px] text-[#000000]">Use a Predefined Stock</span>
+                    <span className="text-[11px] text-[#000000]">Specify Custom Settings</span>
                   </label>
 
-                  {/* Predefined dropdowns */}
-                  <div className="pl-6 space-y-2 max-w-[380px]">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className={`w-20 shrink-0 ${stockMode === 'predefined' ? 'text-[#000000]' : 'text-[#888888]'}`}>
-                        Category:
-                      </span>
-                      <select
-                        disabled={stockMode !== 'predefined'}
-                        value={selectedStockCategory}
-                        onChange={(e) => {
-                          setSelectedStockCategory(e.target.value);
-                          const matching = BUILTIN_STOCK_PRESETS.find((s) => s.category === e.target.value);
-                          if (matching) handleSelectStockPreset(matching);
-                        }}
-                        className="flex-1 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] disabled:bg-[#f1f5f9] disabled:text-[#888888]"
-                      >
-                        <option value="mrp">Thermal Roll — MRP & Retail</option>
-                        <option value="shipping">Thermal Roll — Shipping & Logistics</option>
-                        <option value="product">Thermal Roll — Product & Asset</option>
-                        <option value="a4-sheet">Sheet Labels — A4 Multi-up</option>
-                      </select>
-                    </div>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="stockMode"
+                        checked={stockMode === 'predefined'}
+                        onChange={() => setStockMode('predefined')}
+                        className="accent-[#0078d7]"
+                      />
+                      <span className="text-[11px] text-[#000000]">Use a Predefined Stock</span>
+                    </label>
 
-                    <div className="flex items-start justify-between gap-2">
-                      <span className={`w-20 pt-1 shrink-0 ${stockMode === 'predefined' ? 'text-[#000000]' : 'text-[#888888]'}`}>
-                        Stock Name:
-                      </span>
-                      <div className="flex-1 h-[140px] border border-[#7a7a7a] rounded-[1px] bg-white overflow-y-auto">
-                        {BUILTIN_STOCK_PRESETS.filter((s) => s.category === selectedStockCategory).map((s) => {
-                          const isSelected = selectedStockId === s.id;
-                          return (
-                            <div
-                              key={s.id}
-                              onClick={() => {
-                                if (stockMode === 'predefined') handleSelectStockPreset(s);
-                              }}
-                              className={`px-2 py-1 cursor-pointer text-[11px] truncate ${
-                                isSelected && stockMode === 'predefined'
-                                  ? 'bg-[#3399ff] text-white'
-                                  : 'text-[#000000] hover:bg-[#eef5fc]'
-                              }`}
-                            >
-                              {s.name} ({s.widthMm} × {s.heightMm} mm)
-                            </div>
-                          );
-                        })}
+                    {/* Predefined dropdowns */}
+                    <div className="pl-6 space-y-2 max-w-[340px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`w-18 shrink-0 ${stockMode === 'predefined' ? 'text-[#000000]' : 'text-[#888888]'}`}>
+                          Category:
+                        </span>
+                        <select
+                          disabled={stockMode !== 'predefined'}
+                          value={selectedStockCategory}
+                          onChange={(e) => {
+                            setSelectedStockCategory(e.target.value);
+                            const matching = BUILTIN_STOCK_PRESETS.find((s) => s.category === e.target.value);
+                            if (matching) handleSelectStockPreset(matching);
+                          }}
+                          className="flex-1 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] disabled:bg-[#f1f5f9] disabled:text-[#888888]"
+                        >
+                          <option value="mrp">Thermal Roll — MRP & Retail</option>
+                          <option value="shipping">Thermal Roll — Shipping & Logistics</option>
+                          <option value="product">Thermal Roll — Product & Asset</option>
+                          <option value="a4-sheet">Sheet Labels — A4 Multi-up</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-start justify-between gap-2">
+                        <span className={`w-18 pt-1 shrink-0 ${stockMode === 'predefined' ? 'text-[#000000]' : 'text-[#888888]'}`}>
+                          Stock Name:
+                        </span>
+                        <div className="flex-1 h-[130px] border border-[#7a7a7a] rounded-[1px] bg-white overflow-y-auto">
+                          {BUILTIN_STOCK_PRESETS.filter((s) => s.category === selectedStockCategory).map((s) => {
+                            const isSelected = selectedStockId === s.id;
+                            return (
+                              <div
+                                key={s.id}
+                                onClick={() => {
+                                  if (stockMode === 'predefined') handleSelectStockPreset(s);
+                                }}
+                                className={`px-2 py-1 cursor-pointer text-[11px] truncate ${
+                                  isSelected && stockMode === 'predefined'
+                                    ? 'bg-[#3399ff] text-white'
+                                    : 'text-[#000000] hover:bg-[#eef5fc]'
+                                }`}
+                              >
+                                {s.name} ({s.widthMm} × {s.heightMm} mm)
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Media Tracking Type Selection */}
-                <div className="pt-3 border-t border-[#e5e5e5] space-y-1.5">
-                  <div className="text-[11px] font-semibold text-[#000000]">Media Tracking Type:</div>
-                  <div className="flex flex-wrap items-center gap-4 pl-2">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#000000]">
-                      <input
-                        type="radio"
-                        name="wizardMediaType"
-                        checked={selectedMediaType === 'gap'}
-                        onChange={() => setSelectedMediaType('gap')}
-                        className="accent-[#0078d7]"
-                      />
-                      <span>Die-Cut / Gap Label</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#000000]">
-                      <input
-                        type="radio"
-                        name="wizardMediaType"
-                        checked={selectedMediaType === 'continuous'}
-                        onChange={() => setSelectedMediaType('continuous')}
-                        className="accent-[#0078d7]"
-                      />
-                      <span>Continuous Roll</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#000000]">
-                      <input
-                        type="radio"
-                        name="wizardMediaType"
-                        checked={selectedMediaType === 'black_mark'}
-                        onChange={() => setSelectedMediaType('black_mark')}
-                        className="accent-[#0078d7]"
-                      />
-                      <span>Black Mark (Reflective)</span>
-                    </label>
+                  {/* Media Tracking Type Selection */}
+                  <div className="pt-2 border-t border-[#e5e5e5] space-y-1">
+                    <div className="text-[11px] font-semibold text-[#000000]">Media Tracking Type:</div>
+                    <div className="flex flex-wrap items-center gap-3 pl-2">
+                      <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#000000]">
+                        <input
+                          type="radio"
+                          name="wizardMediaType"
+                          checked={selectedMediaType === 'gap'}
+                          onChange={() => setSelectedMediaType('gap')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Die-Cut / Gap</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#000000]">
+                        <input
+                          type="radio"
+                          name="wizardMediaType"
+                          checked={selectedMediaType === 'continuous'}
+                          onChange={() => setSelectedMediaType('continuous')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Continuous Roll</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#000000]">
+                        <input
+                          type="radio"
+                          name="wizardMediaType"
+                          checked={selectedMediaType === 'black_mark'}
+                          onChange={() => setSelectedMediaType('black_mark')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Black Mark</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 4: Items Per Page */}
           {currentStep === 4 && (
-            <div className="space-y-4">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Specify whether the page contains a single item or multiple rows/columns of items.
-              </p>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  Specify whether the page contains a single item or multiple rows/columns of items.
+                </p>
 
-              <div className="space-y-3 pl-4">
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="itemsMode"
-                    checked={itemsMode === 'single'}
-                    onChange={() => {
-                      setItemsMode('single');
-                      setRows(1);
-                      setColumns(1);
-                    }}
-                    className="mt-0.5 accent-[#0078d7]"
-                  />
-                  <div>
-                    <div className="font-semibold text-[#000000]">Single item per page</div>
-                    <div className="text-[11px] text-[#555555]">Standard continuous roll or individual die-cut label.</div>
-                  </div>
-                </label>
+                <div className="space-y-3 pl-2">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="itemsMode"
+                      checked={itemsMode === 'single'}
+                      onChange={() => {
+                        setItemsMode('single');
+                        setRows(1);
+                        setColumns(1);
+                        setPageWidthMm(labelWidthMm);
+                        setPageHeightMm(labelHeightMm);
+                      }}
+                      className="mt-0.5 accent-[#0078d7]"
+                    />
+                    <div>
+                      <div className="font-semibold text-[#000000]">Single item per page</div>
+                      <div className="text-[11px] text-[#555555]">Standard continuous roll or individual die-cut label.</div>
+                    </div>
+                  </label>
 
-                <label className="flex items-start gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="itemsMode"
-                    checked={itemsMode === 'multiple'}
-                    onChange={() => setItemsMode('multiple')}
-                    className="mt-0.5 accent-[#0078d7]"
-                  />
-                  <div>
-                    <div className="font-semibold text-[#000000]">Multiple columns and/or rows</div>
-                    <div className="text-[11px] text-[#555555]">Labels arranged in a grid matrix on a sheet or multi-across roll.</div>
-                  </div>
-                </label>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="itemsMode"
+                      checked={itemsMode === 'multiple'}
+                      onChange={() => {
+                        setItemsMode('multiple');
+                        const newCols = Math.max(1, columns);
+                        const newRows = Math.max(1, rows);
+                        setPageWidthMm(newCols * labelWidthMm + (newCols - 1) * horizontalGapMm + marginLeft + marginRight);
+                        setPageHeightMm(newRows * labelHeightMm + (newRows - 1) * verticalGapMm + marginTop + marginBottom);
+                      }}
+                      className="mt-0.5 accent-[#0078d7]"
+                    />
+                    <div>
+                      <div className="font-semibold text-[#000000]">Multiple columns and/or rows</div>
+                      <div className="text-[11px] text-[#555555]">Labels arranged in a grid matrix on a sheet or multi-across roll.</div>
+                    </div>
+                  </label>
 
-                {itemsMode === 'multiple' && (
-                  <div className="pl-6 pt-2 space-y-2 max-w-[280px]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[#000000]">Rows:</span>
-                      <input
-                        type="number"
-                        min="1"
-                        max="50"
-                        value={rows}
-                        onChange={(e) => setRows(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-center"
-                      />
+                  {itemsMode === 'multiple' && (
+                    <div className="pl-6 pt-2 space-y-2 max-w-[280px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[#000000]">Rows:</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="50"
+                          value={rows}
+                          onChange={(e) => {
+                            const newRows = Math.max(1, parseInt(e.target.value) || 1);
+                            setRows(newRows);
+                            setPageHeightMm(newRows * labelHeightMm + (newRows - 1) * verticalGapMm + marginTop + marginBottom);
+                          }}
+                          className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-center"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[#000000]">Columns:</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          value={columns}
+                          onChange={(e) => {
+                            const newCols = Math.max(1, parseInt(e.target.value) || 1);
+                            setColumns(newCols);
+                            setPageWidthMm(newCols * labelWidthMm + (newCols - 1) * horizontalGapMm + marginLeft + marginRight);
+                          }}
+                          className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-center"
+                        />
+                      </div>
+                      <div className="text-[10.5px] text-[#555555] pt-1">
+                        Total: <strong>{rows * columns}</strong> items per page
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[#000000]">Columns:</span>
-                      <input
-                        type="number"
-                        min="1"
-                        max="20"
-                        value={columns}
-                        onChange={(e) => setColumns(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-center"
-                      />
-                    </div>
-                    <div className="text-[10.5px] text-[#555555] pt-1">
-                      Total: <strong>{rows * columns}</strong> items per page
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 5: Page Size & Orientation */}
           {currentStep === 5 && (
-            <div className="space-y-4">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Specify the physical page dimensions and printing orientation.
-              </p>
-
-              <div className="space-y-3 max-w-[380px]">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="w-24 shrink-0 text-[#000000]">Page Size:</span>
-                  <select
-                    value={pageSizeType}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setPageSizeType(val);
-                      if (val === 'a4') {
-                        setPageWidthMm(210);
-                        setPageHeightMm(297);
-                      } else if (val === 'a5') {
-                        setPageWidthMm(148);
-                        setPageHeightMm(210);
-                      } else if (val === 'letter') {
-                        setPageWidthMm(215.9);
-                        setPageHeightMm(279.4);
-                      } else if (val === '4x6') {
-                        setPageWidthMm(101.6);
-                        setPageHeightMm(152.4);
-                      }
-                    }}
-                    className="flex-1 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px]"
-                  >
-                    <option value="user-defined">User Defined Size</option>
-                    <option value="4x6">4" × 6" Shipping (101.6 × 152.4 mm)</option>
-                    <option value="a4">A4 (210 × 297 mm)</option>
-                    <option value="a5">A5 (148 × 210 mm)</option>
-                    <option value="letter">Letter (8.5 × 11 in)</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center justify-between gap-2">
-                  <span className="w-24 shrink-0 text-[#000000]">Width:</span>
-                  <div className="flex items-center gap-1 flex-1">
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="5"
-                      value={pageWidthMm}
-                      onChange={(e) => setPageWidthMm(parseFloat(e.target.value) || 0)}
-                      className="w-28 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                    />
-                    <span>mm</span>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] text-[#000000] leading-relaxed">
+                    Specify the physical page dimensions and printing orientation.
+                  </p>
+                  <div className="flex items-center gap-1 text-[10px] bg-slate-200 p-0.5 rounded shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setUnit('mm')}
+                      className={`px-1.5 py-0.5 rounded ${unit === 'mm' ? 'bg-white font-bold text-slate-900 shadow-2xs' : 'text-slate-600'}`}
+                    >
+                      mm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnit('inch')}
+                      className={`px-1.5 py-0.5 rounded ${unit === 'inch' ? 'bg-white font-bold text-slate-900 shadow-2xs' : 'text-slate-600'}`}
+                    >
+                      inch
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <span className="w-24 shrink-0 text-[#000000]">Height:</span>
-                  <div className="flex items-center gap-1 flex-1">
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="5"
-                      value={pageHeightMm}
-                      onChange={(e) => setPageHeightMm(parseFloat(e.target.value) || 0)}
-                      className="w-28 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                    />
-                    <span>mm</span>
+                <div className="space-y-3 max-w-[340px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 shrink-0 text-[#000000]">Page Size:</span>
+                    <select
+                      value={pageSizeType}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setPageSizeType(val);
+                        let w = pageWidthMm;
+                        let h = pageHeightMm;
+                        if (val === 'a4') {
+                          w = 210;
+                          h = 297;
+                        } else if (val === 'a5') {
+                          w = 148;
+                          h = 210;
+                        } else if (val === 'letter') {
+                          w = 215.9;
+                          h = 279.4;
+                        } else if (val === '4x6') {
+                          w = 101.6;
+                          h = 152.4;
+                        }
+                        setPageWidthMm(w);
+                        setPageHeightMm(h);
+                        if (itemsMode === 'single') {
+                          setLabelWidthMm(w);
+                          setLabelHeightMm(h);
+                        }
+                      }}
+                      className="flex-1 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px]"
+                    >
+                      <option value="user-defined">User Defined Size</option>
+                      <option value="4x6">4" × 6" Shipping (101.6 × 152.4 mm)</option>
+                      <option value="a4">A4 (210 × 297 mm)</option>
+                      <option value="a5">A5 (148 × 210 mm)</option>
+                      <option value="letter">Letter (8.5 × 11 in)</option>
+                    </select>
                   </div>
-                </div>
 
-                <div className="pt-2 border-t border-[#dcdcdc]">
-                  <div className="font-bold text-[#000000] mb-2">Orientation:</div>
-                  <div className="grid grid-cols-2 gap-2 pl-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 shrink-0 text-[#000000]">Width:</span>
+                    <div className="flex items-center gap-1 flex-1">
                       <input
-                        type="radio"
-                        name="orientation"
-                        checked={orientation === 'portrait'}
-                        onChange={() => setOrientation('portrait')}
-                        className="accent-[#0078d7]"
+                        type="number"
+                        step={unit === 'inch' ? '0.01' : '0.1'}
+                        min={unit === 'inch' ? '0.2' : '5'}
+                        value={unit === 'inch' ? parseFloat((pageWidthMm / 25.4).toFixed(3)) : parseFloat(pageWidthMm.toFixed(2))}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const mmVal = unit === 'inch' ? val * 25.4 : val;
+                          setPageWidthMm(mmVal);
+                          if (itemsMode === 'single') {
+                            setLabelWidthMm(mmVal);
+                          }
+                        }}
+                        className="w-28 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
                       />
-                      <span>Portrait</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
+                      <span>{unit}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 shrink-0 text-[#000000]">Height:</span>
+                    <div className="flex items-center gap-1 flex-1">
                       <input
-                        type="radio"
-                        name="orientation"
-                        checked={orientation === 'landscape'}
-                        onChange={() => setOrientation('landscape')}
-                        className="accent-[#0078d7]"
+                        type="number"
+                        step={unit === 'inch' ? '0.01' : '0.1'}
+                        min={unit === 'inch' ? '0.2' : '5'}
+                        value={unit === 'inch' ? parseFloat((pageHeightMm / 25.4).toFixed(3)) : parseFloat(pageHeightMm.toFixed(2))}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          const mmVal = unit === 'inch' ? val * 25.4 : val;
+                          setPageHeightMm(mmVal);
+                          if (itemsMode === 'single') {
+                            setLabelHeightMm(mmVal);
+                          }
+                        }}
+                        className="w-28 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
                       />
-                      <span>Landscape</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="orientation"
-                        checked={orientation === 'portrait-180'}
-                        onChange={() => setOrientation('portrait-180')}
-                        className="accent-[#0078d7]"
-                      />
-                      <span>Portrait 180°</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="orientation"
-                        checked={orientation === 'landscape-180'}
-                        onChange={() => setOrientation('landscape-180')}
-                        className="accent-[#0078d7]"
-                      />
-                      <span>Landscape 180°</span>
-                    </label>
+                      <span>{unit}</span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-[#dcdcdc]">
+                    <div className="font-bold text-[#000000] mb-2">Orientation:</div>
+                    <div className="grid grid-cols-2 gap-2 pl-2">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="orientation"
+                          checked={orientation === 'portrait'}
+                          onChange={() => setOrientation('portrait')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Portrait</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="orientation"
+                          checked={orientation === 'landscape'}
+                          onChange={() => setOrientation('landscape')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Landscape</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="orientation"
+                          checked={orientation === 'portrait-180'}
+                          onChange={() => setOrientation('portrait-180')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Portrait 180°</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="orientation"
+                          checked={orientation === 'landscape-180'}
+                          onChange={() => setOrientation('landscape-180')}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Landscape 180°</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 6: Margins */}
           {currentStep === 6 && (
-            <div className="space-y-4">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Specify the margins around the edges of the page that cannot be printed on.
-              </p>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  Specify the margins around the edges of the page that cannot be printed on.
+                </p>
 
-              <div className="space-y-3 max-w-[340px] pl-4">
-                <div className="font-bold text-[#000000]">Unused / Margin Area:</div>
+                <div className="space-y-3 max-w-[320px] pl-2">
+                  <div className="font-bold text-[#000000]">Unused / Margin Area:</div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Left:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={marginLeft}
-                        onChange={(e) => setMarginLeft(parseFloat(e.target.value) || 0)}
-                        className="w-20 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                      />
-                      <span>mm</span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Left:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={marginLeft}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setMarginLeft(val);
+                            if (itemsMode === 'multiple') {
+                              setPageWidthMm(columns * labelWidthMm + (columns - 1) * horizontalGapMm + val + marginRight);
+                            }
+                          }}
+                          className="w-18 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
+                        />
+                        <span>mm</span>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Right:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={marginRight}
-                        onChange={(e) => setMarginRight(parseFloat(e.target.value) || 0)}
-                        className="w-20 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                      />
-                      <span>mm</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Right:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={marginRight}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setMarginRight(val);
+                            if (itemsMode === 'multiple') {
+                              setPageWidthMm(columns * labelWidthMm + (columns - 1) * horizontalGapMm + marginLeft + val);
+                            }
+                          }}
+                          className="w-18 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
+                        />
+                        <span>mm</span>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Top:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={marginTop}
-                        onChange={(e) => setMarginTop(parseFloat(e.target.value) || 0)}
-                        className="w-20 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                      />
-                      <span>mm</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Top:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={marginTop}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setMarginTop(val);
+                            if (itemsMode === 'multiple') {
+                              setPageHeightMm(rows * labelHeightMm + (rows - 1) * verticalGapMm + val + marginBottom);
+                            }
+                          }}
+                          className="w-18 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
+                        />
+                        <span>mm</span>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Bottom:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0"
-                        value={marginBottom}
-                        onChange={(e) => setMarginBottom(parseFloat(e.target.value) || 0)}
-                        className="w-20 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                      />
-                      <span>mm</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Bottom:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={marginBottom}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setMarginBottom(val);
+                            if (itemsMode === 'multiple') {
+                              setPageHeightMm(rows * labelHeightMm + (rows - 1) * verticalGapMm + marginTop + val);
+                            }
+                          }}
+                          className="w-18 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
+                        />
+                        <span>mm</span>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 7: Label Shape */}
           {currentStep === 7 && (
-            <div className="space-y-4">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Select the physical shape of the label.
-              </p>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  Select the physical shape of the label.
+                </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                {/* Options on the left */}
-                <div className="space-y-2.5 pl-4 sm:pl-6">
+                <div className="space-y-2.5 pl-2 max-w-[280px]">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="radio"
@@ -1202,7 +1330,7 @@ export const NewDocumentWizardModal: React.FC<NewDocumentWizardModalProps> = ({
                       className="accent-[#0078d7]"
                     />
                     <span className="font-medium text-[#111111]">Rectangle</span>
-                    <span className="text-[10px] text-slate-500">(90° Square Corners)</span>
+                    <span className="text-[10px] text-slate-500">(90° Corners)</span>
                   </label>
 
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -1254,385 +1382,371 @@ export const NewDocumentWizardModal: React.FC<NewDocumentWizardModalProps> = ({
                     <span className="font-medium text-[#111111]">Circle</span>
                   </label>
                 </div>
-
-                {/* Visual shape preview box on the right */}
-                <div className="border border-[#7a7a7a] bg-white p-3 rounded-[2px] flex flex-col items-center justify-center min-h-[140px] shadow-inner">
-                  <div className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                    Shape Preview
-                  </div>
-                  <div
-                    className="border-2 border-[#0078d7] bg-[#ebf3fc] transition-all duration-150 flex items-center justify-center relative shadow-xs"
-                    style={{
-                      width: labelShape === 'circle' ? '90px' : '140px',
-                      height: '90px',
-                      borderRadius:
-                        labelShape === 'rectangle'
-                          ? '0px'
-                          : labelShape === 'rounded'
-                          ? `${Math.min(30, Math.max(4, cornerRadiusMm * 4))}px`
-                          : '50%',
-                    }}
-                  >
-                    {/* Safe zone simulation */}
-                    <div
-                      className="absolute inset-1.5 border border-dashed border-[#0078d7]/60 pointer-events-none"
-                      style={{
-                        borderRadius:
-                          labelShape === 'rectangle'
-                            ? '0px'
-                            : labelShape === 'rounded'
-                            ? `${Math.max(0, Math.min(26, cornerRadiusMm * 4 - 2))}px`
-                            : '50%',
-                      }}
-                    />
-                    <span className="text-[10px] font-semibold text-[#005a9e] capitalize z-10">
-                      {labelShape === 'rounded' ? `Rounded (${cornerRadiusMm}mm)` : labelShape}
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-2">
-                    {labelShape === 'rectangle' && 'Standard die-cut rectangular sheet with sharp corners'}
-                    {labelShape === 'rounded' && `Corner radius: ${cornerRadiusMm} mm arc`}
-                    {labelShape === 'ellipse' && 'Continuous curved ellipse label'}
-                    {labelShape === 'circle' && 'Equal diameter circular label'}
-                  </div>
-                </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 8: Size & Gap */}
           {currentStep === 8 && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] text-[#000000] leading-relaxed">
-                  Specify the size of the template and the spacing between items.
-                </p>
-                <div className="flex items-center gap-1 text-[10px] bg-slate-200 p-0.5 rounded shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setUnit('mm')}
-                    className={`px-1.5 py-0.5 rounded ${unit === 'mm' ? 'bg-white font-bold text-slate-900 shadow-2xs' : 'text-slate-600'}`}
-                  >
-                    mm
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUnit('inch')}
-                    className={`px-1.5 py-0.5 rounded ${unit === 'inch' ? 'bg-white font-bold text-slate-900 shadow-2xs' : 'text-slate-600'}`}
-                  >
-                    inch
-                  </button>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] text-[#000000] leading-relaxed">
+                    Specify the size of the template and the spacing between items.
+                  </p>
+                  <div className="flex items-center gap-1 text-[10px] bg-slate-200 p-0.5 rounded shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setUnit('mm')}
+                      className={`px-1.5 py-0.5 rounded ${unit === 'mm' ? 'bg-white font-bold text-slate-900 shadow-2xs' : 'text-slate-600'}`}
+                    >
+                      mm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUnit('inch')}
+                      className={`px-1.5 py-0.5 rounded ${unit === 'inch' ? 'bg-white font-bold text-slate-900 shadow-2xs' : 'text-slate-600'}`}
+                    >
+                      inch
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3 max-w-[320px] pl-2">
+                  <div className="space-y-2">
+                    <div className="font-bold text-[#000000]">Template Size:</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Width:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step={unit === 'inch' ? '0.01' : '0.1'}
+                          min={unit === 'inch' ? '0.2' : '5'}
+                          value={unit === 'inch' ? parseFloat((labelWidthMm / 25.4).toFixed(3)) : parseFloat(labelWidthMm.toFixed(2))}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const mmVal = unit === 'inch' ? val * 25.4 : val;
+                            setLabelWidthMm(mmVal);
+                            if (itemsMode === 'single') {
+                              setPageWidthMm(mmVal);
+                            } else {
+                              setPageWidthMm(columns * mmVal + (columns - 1) * horizontalGapMm + marginLeft + marginRight);
+                            }
+                          }}
+                          className="w-22 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
+                        />
+                        <span>{unit}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Height:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step={unit === 'inch' ? '0.01' : '0.1'}
+                          min={unit === 'inch' ? '0.2' : '5'}
+                          value={unit === 'inch' ? parseFloat((labelHeightMm / 25.4).toFixed(3)) : parseFloat(labelHeightMm.toFixed(2))}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const mmVal = unit === 'inch' ? val * 25.4 : val;
+                            setLabelHeightMm(mmVal);
+                            if (itemsMode === 'single') {
+                              setPageHeightMm(mmVal);
+                            } else {
+                              setPageHeightMm(rows * mmVal + (rows - 1) * verticalGapMm + marginTop + marginBottom);
+                            }
+                          }}
+                          className="w-22 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
+                        />
+                        <span>{unit}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-[#dcdcdc]">
+                    <div className="font-bold text-[#000000]">Gap / Pitch:</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Horizontal:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step={unit === 'inch' ? '0.01' : '0.5'}
+                          min="0"
+                          value={unit === 'inch' ? parseFloat((horizontalGapMm / 25.4).toFixed(3)) : parseFloat(horizontalGapMm.toFixed(2))}
+                          disabled={!manualGap}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const mmVal = unit === 'inch' ? val * 25.4 : val;
+                            setHorizontalGapMm(mmVal);
+                            if (itemsMode === 'multiple') {
+                              setPageWidthMm(columns * labelWidthMm + (columns - 1) * mmVal + marginLeft + marginRight);
+                            }
+                          }}
+                          className="w-22 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right disabled:bg-[#f1f5f9]"
+                        />
+                        <span>{unit}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Vertical:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step={unit === 'inch' ? '0.01' : '0.5'}
+                          min="0"
+                          value={unit === 'inch' ? parseFloat((verticalGapMm / 25.4).toFixed(3)) : parseFloat(verticalGapMm.toFixed(2))}
+                          disabled={!manualGap}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const mmVal = unit === 'inch' ? val * 25.4 : val;
+                            setVerticalGapMm(mmVal);
+                            if (itemsMode === 'multiple') {
+                              setPageHeightMm(rows * labelHeightMm + (rows - 1) * mmVal + marginTop + marginBottom);
+                            }
+                          }}
+                          className="w-22 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right disabled:bg-[#f1f5f9]"
+                        />
+                        <span>{unit}</span>
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer pt-0.5">
+                      <input
+                        type="checkbox"
+                        checked={manualGap}
+                        onChange={(e) => setManualGap(e.target.checked)}
+                        className="accent-[#0078d7]"
+                      />
+                      <span>Set manually</span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-4 max-w-[360px] pl-4">
-                <div className="space-y-2">
-                  <div className="font-bold text-[#000000]">Template Size:</div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Width:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step={unit === 'inch' ? '0.01' : '0.1'}
-                        min={unit === 'inch' ? '0.2' : '5'}
-                        value={unit === 'inch' ? parseFloat((labelWidthMm / 25.4).toFixed(3)) : labelWidthMm}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setLabelWidthMm(unit === 'inch' ? val * 25.4 : val);
-                        }}
-                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                      />
-                      <span>{unit}</span>
-                      {unit === 'inch' && (
-                        <span className="text-[10px] text-slate-400 font-mono">({labelWidthMm.toFixed(1)} mm)</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Height:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step={unit === 'inch' ? '0.01' : '0.1'}
-                        min={unit === 'inch' ? '0.2' : '5'}
-                        value={unit === 'inch' ? parseFloat((labelHeightMm / 25.4).toFixed(3)) : labelHeightMm}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setLabelHeightMm(unit === 'inch' ? val * 25.4 : val);
-                        }}
-                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right"
-                      />
-                      <span>{unit}</span>
-                      {unit === 'inch' && (
-                        <span className="text-[10px] text-slate-400 font-mono">({labelHeightMm.toFixed(1)} mm)</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2 pt-2 border-t border-[#dcdcdc]">
-                  <div className="font-bold text-[#000000]">Gap / Pitch:</div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Horizontal:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step={unit === 'inch' ? '0.01' : '0.5'}
-                        min="0"
-                        value={unit === 'inch' ? parseFloat((horizontalGapMm / 25.4).toFixed(3)) : horizontalGapMm}
-                        disabled={!manualGap}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setHorizontalGapMm(unit === 'inch' ? val * 25.4 : val);
-                        }}
-                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right disabled:bg-[#f1f5f9]"
-                      />
-                      <span>{unit}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>Vertical:</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        step={unit === 'inch' ? '0.01' : '0.5'}
-                        min="0"
-                        value={unit === 'inch' ? parseFloat((verticalGapMm / 25.4).toFixed(3)) : verticalGapMm}
-                        disabled={!manualGap}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
-                          setVerticalGapMm(unit === 'inch' ? val * 25.4 : val);
-                        }}
-                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px] font-mono text-right disabled:bg-[#f1f5f9]"
-                      />
-                      <span>{unit}</span>
-                    </div>
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer pt-1">
-                    <input
-                      type="checkbox"
-                      checked={manualGap}
-                      onChange={(e) => setManualGap(e.target.checked)}
-                      className="accent-[#0078d7]"
-                    />
-                    <span>Set manually</span>
-                  </label>
-
-                  {/* Live Pitch Calculation (P1-6) */}
-                  <div className="pt-2 border-t border-[#dcdcdc] bg-slate-50 p-2.5 rounded text-[11px] space-y-1">
-                    <div className="font-bold text-slate-800">Live Calculated Pitch:</div>
-                    <div className="flex items-center justify-between text-slate-700">
-                      <span>Horizontal Pitch (Width + Gap):</span>
-                      <span className="font-mono font-bold text-indigo-700">
-                        {(labelWidthMm + horizontalGapMm).toFixed(2)} mm
-                        {unit === 'inch' && ` (${((labelWidthMm + horizontalGapMm) / 25.4).toFixed(3)} in)`}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-slate-700">
-                      <span>Vertical Pitch (Height + Gap):</span>
-                      <span className="font-mono font-bold text-indigo-700">
-                        {(labelHeightMm + verticalGapMm).toFixed(2)} mm
-                        {unit === 'inch' && ` (${((labelHeightMm + verticalGapMm) / 25.4).toFixed(3)} in)`}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 9: Print Order */}
           {currentStep === 9 && (
-            <div className="space-y-4">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Specify the order in which items are printed on the page.
-              </p>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  Specify the order in which items are printed on the page.
+                </p>
 
-              <div className="space-y-3 max-w-[340px] pl-4">
-                <div className="font-bold text-[#000000]">Printing Order:</div>
+                <div className="space-y-3 max-w-[320px] pl-2">
+                  <div className="font-bold text-[#000000]">Printing Order:</div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <span>Starting Corner:</span>
-                  <select
-                    value={printCorner}
-                    onChange={(e) => setPrintCorner(e.target.value as PrintCorner)}
-                    className="w-36 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px]"
-                  >
-                    <option value="top-left">Top Left</option>
-                    <option value="top-right">Top Right</option>
-                    <option value="bottom-left">Bottom Left</option>
-                    <option value="bottom-right">Bottom Right</option>
-                  </select>
-                </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Starting Corner:</span>
+                    <select
+                      value={printCorner}
+                      onChange={(e) => setPrintCorner(e.target.value as PrintCorner)}
+                      className="w-32 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px]"
+                    >
+                      <option value="top-left">Top Left</option>
+                      <option value="top-right">Top Right</option>
+                      <option value="bottom-left">Bottom Left</option>
+                      <option value="bottom-right">Bottom Right</option>
+                    </select>
+                  </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <span>Direction:</span>
-                  <select
-                    value={printDirection}
-                    onChange={(e) => setPrintDirection(e.target.value as PrintDirection)}
-                    className="w-36 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px]"
-                  >
-                    <option value="horizontal">Horizontal</option>
-                    <option value="vertical">Vertical</option>
-                  </select>
-                </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Direction:</span>
+                    <select
+                      value={printDirection}
+                      onChange={(e) => setPrintDirection(e.target.value as PrintDirection)}
+                      className="w-32 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] bg-white text-[11px]"
+                    >
+                      <option value="horizontal">Horizontal</option>
+                      <option value="vertical">Vertical</option>
+                    </select>
+                  </div>
 
-                <div className="space-y-1.5 pt-2 border-t border-[#dcdcdc]">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectStartAtPrint}
-                      onChange={(e) => setSelectStartAtPrint(e.target.checked)}
-                      className="accent-[#0078d7]"
-                    />
-                    <span>Select starting position at print time</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={continueFromPrevious}
-                      onChange={(e) => setContinueFromPrevious(e.target.checked)}
-                      className="accent-[#0078d7]"
-                    />
-                    <span>Continue from last position of previous job</span>
-                  </label>
+                  <div className="space-y-1.5 pt-2 border-t border-[#dcdcdc]">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectStartAtPrint}
+                        onChange={(e) => setSelectStartAtPrint(e.target.checked)}
+                        className="accent-[#0078d7]"
+                      />
+                      <span>Select starting position at print time</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={continueFromPrevious}
+                        onChange={(e) => setContinueFromPrevious(e.target.checked)}
+                        className="accent-[#0078d7]"
+                      />
+                      <span>Continue from last position of previous job</span>
+                    </label>
+                  </div>
                 </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
           {/* STEP 10: Background */}
           {currentStep === 10 && (
-            <div className="space-y-4">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Specify background color or reference image options for the document.
-              </p>
+            <div className="flex items-start justify-between gap-4 h-full">
+              <div className="flex-1 space-y-4">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  Specify background color or reference image options for the document.
+                </p>
 
-              <div className="space-y-3 pl-4 max-w-[380px]">
-                <div className="font-bold text-[#000000]">Background Features:</div>
+                <div className="space-y-3 pl-2 max-w-[340px]">
+                  <div className="font-bold text-[#000000]">Background Features:</div>
 
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useBgColor}
-                    onChange={(e) => setUseBgColor(e.target.checked)}
-                    className="accent-[#0078d7]"
-                  />
-                  <span>Color</span>
-                </label>
-
-                {useBgColor && (
-                  <div className="pl-6 flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
                     <input
-                      type="color"
-                      value={bgColor}
-                      onChange={(e) => setBgColor(e.target.value)}
-                      className="w-8 h-[22px] p-0 border border-[#7a7a7a] rounded-[1px] cursor-pointer"
+                      type="checkbox"
+                      checked={useBgColor}
+                      onChange={(e) => setUseBgColor(e.target.checked)}
+                      className="accent-[#0078d7]"
                     />
-                    <input
-                      type="text"
-                      value={bgColor}
-                      onChange={(e) => setBgColor(e.target.value)}
-                      className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] text-[11px] font-mono"
-                    />
-                  </div>
-                )}
+                    <span>Color</span>
+                  </label>
 
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useBgImage}
-                    onChange={(e) => setUseBgImage(e.target.checked)}
-                    className="accent-[#0078d7]"
-                  />
-                  <span>Picture / Template Image</span>
-                </label>
-
-                {useBgImage && (
-                  <div className="pl-6 space-y-2">
-                    <input
-                      type="text"
-                      placeholder="Enter image file path or URL..."
-                      value={bgImageUrl}
-                      onChange={(e) => setBgImageUrl(e.target.value)}
-                      className="w-full h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] text-[11px]"
-                    />
-                    <label className="flex items-center gap-2 cursor-pointer">
+                  {useBgColor && (
+                    <div className="pl-6 flex items-center gap-2">
                       <input
-                        type="checkbox"
-                        checked={showBgInDesigner}
-                        onChange={(e) => setShowBgInDesigner(e.target.checked)}
-                        className="accent-[#0078d7]"
+                        type="color"
+                        value={bgColor}
+                        onChange={(e) => setBgColor(e.target.value)}
+                        className="w-8 h-[22px] p-0 border border-[#7a7a7a] rounded-[1px] cursor-pointer"
                       />
-                      <span>Show in Designer as layout guide</span>
-                    </label>
-                  </div>
-                )}
+                      <input
+                        type="text"
+                        value={bgColor}
+                        onChange={(e) => setBgColor(e.target.value)}
+                        className="w-24 h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] text-[11px] font-mono"
+                      />
+                    </div>
+                  )}
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useBgImage}
+                      onChange={(e) => setUseBgImage(e.target.checked)}
+                      className="accent-[#0078d7]"
+                    />
+                    <span>Picture / Template Image</span>
+                  </label>
+
+                  {useBgImage && (
+                    <div className="pl-6 space-y-2">
+                      <input
+                        type="text"
+                        placeholder="Enter image file path or URL..."
+                        value={bgImageUrl}
+                        onChange={(e) => setBgImageUrl(e.target.value)}
+                        className="w-full h-[22px] px-1 border border-[#7a7a7a] rounded-[1px] text-[11px]"
+                      />
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={showBgInDesigner}
+                          onChange={(e) => setShowBgInDesigner(e.target.checked)}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Show in Designer as layout guide</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* Live Preview Panel */}
+              {renderLivePreview()}
             </div>
           )}
 
-          {/* STEP 11: Summary */}
+          {/* STEP 11: Summary (Split Layout: Properties Table on Left + Live BarTender Roll Preview on Right) */}
           {currentStep === 11 && (
-            <div className="space-y-3">
-              <p className="text-[11px] text-[#000000] leading-relaxed">
-                Review the document properties before creating the new label.
-              </p>
+            <div className="flex items-start justify-between gap-5 h-full">
+              <div className="flex-1 space-y-3">
+                <p className="text-[11px] text-[#000000] leading-relaxed">
+                  Review the document properties before creating the new label.
+                </p>
 
-              <div className="border border-[#7a7a7a] bg-white rounded-[1px] p-3 max-w-[480px]">
-                <table className="w-full text-left text-[11px] border-collapse">
-                  <tbody>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="w-32 py-1 text-[#666666]">Printer:</td>
-                      <td className="py-1 font-semibold text-[#000000]">{selectedPrinter?.name || 'Default Printer'}</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">DPI:</td>
-                      <td className="py-1 font-mono text-[#000000]">{selectedPrinter?.dpi || 203} DPI</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Label Size:</td>
-                      <td className="py-1 font-mono text-[#000000]">{labelWidthMm} × {labelHeightMm} mm</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Page Size:</td>
-                      <td className="py-1 font-mono text-[#000000]">{pageWidthMm} × {pageHeightMm} mm</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Media:</td>
-                      <td className="py-1 text-[#000000]">
-                        {rows * columns > 1
-                          ? `${rows}×${columns} Multi-up (${selectedMediaType})`
-                          : selectedMediaType === 'continuous'
-                          ? 'Continuous Roll'
-                          : selectedMediaType === 'black_mark'
-                          ? 'Black Mark Label'
-                          : 'Die-Cut Gap Label'}
-                      </td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Margins:</td>
-                      <td className="py-1 font-mono text-[#000000]">L:{marginLeft} R:{marginRight} T:{marginTop} B:{marginBottom} mm</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Gap:</td>
-                      <td className="py-1 font-mono text-[#000000]">H:{horizontalGapMm}mm, V:{verticalGapMm}mm</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Orientation:</td>
-                      <td className="py-1 capitalize text-[#000000]">{orientation}</td>
-                    </tr>
-                    <tr className="border-b border-[#e5e5e5]">
-                      <td className="py-1 text-[#666666]">Shape:</td>
-                      <td className="py-1 capitalize text-[#000000]">{labelShape}</td>
-                    </tr>
-                    <tr>
-                      <td className="py-1 text-[#666666]">Print Order:</td>
-                      <td className="py-1 capitalize text-[#000000]">{printCorner} / {printDirection}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div className="border border-[#7a7a7a] bg-white rounded-[1px] p-3 w-full shadow-inner">
+                  <table className="w-full text-left text-[11px] border-collapse">
+                    <tbody>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="w-28 py-1 text-[#666666]">Printer:</td>
+                        <td className="py-1 font-semibold text-[#000000]">{selectedPrinter?.name || 'Default Printer'}</td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">DPI:</td>
+                        <td className="py-1 font-mono text-[#000000]">{selectedPrinter?.dpi || 203} DPI</td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Label Size:</td>
+                        <td className="py-1 font-mono text-[#000000]">
+                          {labelWidthMm.toFixed(1)} × {labelHeightMm.toFixed(1)} mm
+                          <span className="text-slate-500 font-normal ml-1">
+                            ({(labelWidthMm / 25.4).toFixed(2)} × {(labelHeightMm / 25.4).toFixed(2)} in)
+                          </span>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Page Size:</td>
+                        <td className="py-1 font-mono text-[#000000]">
+                          {pageWidthMm.toFixed(1)} × {pageHeightMm.toFixed(1)} mm
+                          <span className="text-slate-500 font-normal ml-1">
+                            ({(pageWidthMm / 25.4).toFixed(2)} × {(pageHeightMm / 25.4).toFixed(2)} in)
+                          </span>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Media:</td>
+                        <td className="py-1 text-[#000000]">
+                          {rows * columns > 1
+                            ? `${rows}×${columns} Multi-up (${selectedMediaType})`
+                            : selectedMediaType === 'continuous'
+                            ? 'Continuous Roll'
+                            : selectedMediaType === 'black_mark'
+                            ? 'Black Mark Label'
+                            : 'Die-Cut Gap Label'}
+                        </td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Margins:</td>
+                        <td className="py-1 font-mono text-[#000000]">L:{marginLeft} R:{marginRight} T:{marginTop} B:{marginBottom} mm</td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Gap:</td>
+                        <td className="py-1 font-mono text-[#000000]">H:{horizontalGapMm}mm, V:{verticalGapMm}mm</td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Orientation:</td>
+                        <td className="py-1 capitalize text-[#000000]">{orientation}</td>
+                      </tr>
+                      <tr className="border-b border-[#e5e5e5]">
+                        <td className="py-1 text-[#666666]">Shape:</td>
+                        <td className="py-1 capitalize text-[#000000]">{labelShape}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1 text-[#666666]">Print Order:</td>
+                        <td className="py-1 capitalize text-[#000000]">{printCorner} / {printDirection}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
+
+              {/* BarTender Live Roll / Sheet Preview */}
+              {renderLivePreview()}
             </div>
           )}
 

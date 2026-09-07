@@ -51,6 +51,7 @@ interface ObjectToolbarProps {
   onNew: () => void;
   onOpen: () => void;
   onSave: () => void;
+  onSaveAs?: () => void;
   onPrint: () => void;
   onCut: () => void;
   onCopy: () => void;
@@ -217,7 +218,10 @@ export const ObjectToolbar: React.FC<ObjectToolbarProps> = (props) => {
         {/* Standard File/Edit Buttons */}
         <ToolBtn icon={<FileText className="w-4 h-4 text-blue-600" />} title="New Document (Ctrl+N)" onClick={props.onNew} />
         <ToolBtn icon={<FolderOpen className="w-4 h-4 text-amber-500" />} title="Open Document (Ctrl+O)" onClick={props.onOpen} />
-        <ToolBtn icon={<Save className="w-4 h-4 text-blue-700" />} title="Save Template (Ctrl+S)" onClick={props.onSave} />
+        <ToolBtn icon={<Save className="w-4 h-4 text-blue-700" />} title="Save Document (Ctrl+S)" onClick={props.onSave} />
+        {props.onSaveAs && (
+          <ToolBtn icon={<Copy className="w-4 h-4 text-slate-700" />} title="Save As... (Ctrl+Shift+S)" onClick={props.onSaveAs} />
+        )}
         <ToolBtn icon={<Printer className="w-4 h-4 text-slate-800" />} title="Print Production Labels (Ctrl+P)" onClick={props.onPrint} />
 
         <Divider />

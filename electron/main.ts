@@ -387,6 +387,149 @@ function registerExcelIpc() {
   });
 }
 
+function registerDocumentIpc() {
+  // 1. Show Native Windows Save As Dialog
+  ipcMain.handle('document:show-save-dialog', async (_event, defaultFileName?: string, defaultDir?: string) => {
+    if (!mainWindow) return { canceled: true };
+    const defaultName = (defaultFileName || 'Document1').replace(/[\/\\:*?"<>|]/g, '_');
+    const safeName = defaultName.endsWith('.bfl') || defaultName.endsWith('.btw') ? defaultName : `${defaultName}.bfl`;
+    const defaultPath = defaultDir && fs.existsSync(defaultDir)
+      ? path.join(defaultDir, safeName)
+      : path.join(app.getPath('documents'), safeName);
+
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save As - BarcodeFlow Document',
+      defaultPath,
+      filters: [
+        { name: 'BarcodeFlow Document (*.bfl)', extensions: ['bfl'] },
+        { name: 'BarTender Document (*.btw)', extensions: ['btw'] },
+        { name: 'JSON Document (*.json)', extensions: ['json'] },
+        { name: 'All Files (*.*)', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+
+    const resolvedPath = path.normalize(path.resolve(result.filePath));
+    return {
+      canceled: false,
+      filePath: resolvedPath,
+      fileName: path.basename(resolvedPath),
+    };
+  });
+
+  // 2. Safe Atomic File Save
+  ipcMain.handle('document:save-file', async (_event, { filePath, documentData }: { filePath: string; documentData: any }) => {
+    if (!filePath) {
+      return { success: false, error: 'File path cannot be empty' };
+    }
+    const resolvedPath = path.normalize(path.resolve(filePath));
+    const targetDir = path.dirname(resolvedPath);
+    if (!fs.existsSync(targetDir)) {
+      try {
+        fs.mkdirSync(targetDir, { recursive: true });
+      } catch (err: any) {
+        return { success: false, error: `Failed to create directory: ${err.message}` };
+      }
+    }
+
+    const tempPath = `${resolvedPath}.tmp-${Date.now()}`;
+    const payload = typeof documentData === 'string' ? documentData : JSON.stringify(documentData, null, 2);
+
+    try {
+      await fs.promises.writeFile(tempPath, payload, 'utf-8');
+      await fs.promises.rename(tempPath, resolvedPath);
+      const stats = await fs.promises.stat(resolvedPath);
+      return {
+        success: true,
+        filePath: resolvedPath,
+        fileName: path.basename(resolvedPath),
+        sizeBytes: stats.size,
+        lastModified: stats.mtime.toISOString(),
+      };
+    } catch (err: any) {
+      try {
+        if (fs.existsSync(tempPath)) await fs.promises.unlink(tempPath);
+      } catch { }
+      return { success: false, error: err.message || 'Disk write failed' };
+    }
+  });
+
+  // 3. Show Native Windows Open Dialog
+  ipcMain.handle('document:show-open-dialog', async (_event, defaultDir?: string) => {
+    if (!mainWindow) return { canceled: true };
+    const defaultPath = defaultDir && fs.existsSync(defaultDir) ? defaultDir : app.getPath('documents');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Open Document - BarcodeFlow',
+      defaultPath,
+      properties: ['openFile'],
+      filters: [
+        { name: 'BarcodeFlow & BarTender Documents (*.bfl, *.btw, *.json)', extensions: ['bfl', 'btw', 'json'] },
+        { name: 'BarcodeFlow Document (*.bfl)', extensions: ['bfl'] },
+        { name: 'BarTender Document (*.btw)', extensions: ['btw'] },
+        { name: 'JSON Document (*.json)', extensions: ['json'] },
+        { name: 'All Files (*.*)', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { canceled: true };
+    }
+
+    const resolvedPath = path.normalize(path.resolve(result.filePaths[0]));
+    return {
+      canceled: false,
+      filePath: resolvedPath,
+      fileName: path.basename(resolvedPath),
+    };
+  });
+
+  // 4. Read Document File
+  ipcMain.handle('document:read-file', async (_event, filePath: string) => {
+    if (!filePath) {
+      return { success: false, error: 'File path cannot be empty' };
+    }
+    const resolvedPath = path.normalize(path.resolve(filePath));
+    if (!fs.existsSync(resolvedPath)) {
+      return { success: false, error: `File not found: ${resolvedPath}` };
+    }
+
+    try {
+      const content = await fs.promises.readFile(resolvedPath, 'utf-8');
+      const parsed = JSON.parse(content);
+      const stats = await fs.promises.stat(resolvedPath);
+      return {
+        success: true,
+        document: parsed,
+        filePath: resolvedPath,
+        fileName: path.basename(resolvedPath),
+        sizeBytes: stats.size,
+        lastModified: stats.mtime.toISOString(),
+      };
+    } catch (err: any) {
+      return { success: false, error: `Failed to read document: ${err.message}` };
+    }
+  });
+
+  // 5. Check if File Exists
+  ipcMain.handle('document:check-file-exists', async (_event, filePath: string) => {
+    if (!filePath) return false;
+    try {
+      return fs.existsSync(path.normalize(path.resolve(filePath)));
+    } catch {
+      return false;
+    }
+  });
+
+  // 6. Native App Exit
+  ipcMain.handle('app:exit', async () => {
+    app.quit();
+    return true;
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -430,6 +573,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerDocumentIpc();
   registerExcelIpc();
   registerPrinterIpc(() => mainWindow);
   startBackendServer();

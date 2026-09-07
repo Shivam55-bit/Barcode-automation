@@ -27,6 +27,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('excel:file-changed', listener);
     };
   },
+  // Desktop Document File APIs
+  showSaveDialog: (defaultFileName?: string, defaultDir?: string): Promise<{ canceled: boolean; filePath?: string; fileName?: string }> =>
+    ipcRenderer.invoke('document:show-save-dialog', defaultFileName, defaultDir),
+  saveFile: (filePath: string, documentData: any): Promise<{ success: boolean; filePath?: string; fileName?: string; sizeBytes?: number; lastModified?: string; error?: string }> =>
+    ipcRenderer.invoke('document:save-file', { filePath, documentData }),
+  showOpenDialog: (defaultDir?: string): Promise<{ canceled: boolean; filePath?: string; fileName?: string }> =>
+    ipcRenderer.invoke('document:show-open-dialog', defaultDir),
+  readFile: (filePath: string): Promise<{ success: boolean; document?: any; filePath?: string; fileName?: string; sizeBytes?: number; lastModified?: string; error?: string }> =>
+    ipcRenderer.invoke('document:read-file', filePath),
+  checkFileExists: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('document:check-file-exists', filePath),
+  exitApp: (): Promise<boolean> =>
+    ipcRenderer.invoke('app:exit'),
 });
 
 contextBridge.exposeInMainWorld('barcodeFlow', {

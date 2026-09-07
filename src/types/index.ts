@@ -1,3 +1,5 @@
+import { DataEntryFormDefinition } from './formTypes';
+
 export type UnitType = 'mm' | 'inch' | 'px';
 export type DpiOption = 203 | 300 | 600;
 export type ElementType = 'text' | 'barcode' | 'shape' | 'image' | 'table' | 'line' | 'container' | 'group';
@@ -902,6 +904,59 @@ export interface ViewportState {
   gridSize: number; // in mm
   unit: UnitType;
   previewRecordIndex: number;
+}
+
+export interface OpenDocument {
+  instanceId: string;
+  documentId: string | null;
+  filePath?: string | null;
+  type: 'template' | 'form';
+  name: string;
+  isDirty: boolean;
+  isNew: boolean;
+  template?: LabelTemplate;
+  form?: DataEntryFormDefinition;
+  selectedElementIds: string[];
+  history: {
+    entries: LabelElement[][];
+    index: number;
+  };
+  viewState: {
+    zoom: number;
+    panX: number;
+    panY: number;
+  };
+  dataState?: {
+    connectionId?: string;
+    currentRecordIndex: number;
+    selectedRecordIndices: number[];
+  };
+}
+
+export interface BarcodeFlowDocumentFile {
+  format: 'BarcodeFlowDocument' | 'BarTenderDocument';
+  version: number;
+  documentId: string;
+  name: string;
+  type: 'template' | 'form';
+  template?: LabelTemplate;
+  form?: DataEntryFormDefinition;
+  dataConnections?: any[];
+  printerSettings?: any;
+  pageSetup?: any;
+  metadata?: {
+    createdAt?: string;
+    updatedAt?: string;
+    savedBy?: string;
+    appVersion?: string;
+  };
+}
+
+export interface RecentDocumentEntry {
+  filePath: string;
+  fileName: string;
+  lastOpenedAt: string;
+  templateName?: string;
 }
 
 export * from './formTypes';

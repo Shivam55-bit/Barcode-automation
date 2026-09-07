@@ -15,6 +15,7 @@ import {
   UnitType,
   DatabaseConnectionConfig,
   DataSourceItem,
+  OpenDocument,
 } from './types';
 import { INITIAL_TEMPLATES, getUserPersonalizedTemplates } from './services/initialTemplates';
 import { INITIAL_PRINT_JOBS, INITIAL_AUDIT_LOGS, INITIAL_USERS, INITIAL_BATCH_JOBS } from './services/mockDataService';
@@ -61,6 +62,9 @@ import { DocumentEventScriptsModal } from './components/dialogs/DocumentEventScr
 import { FormulaBuilderModal } from './components/dialogs/FormulaBuilderModal';
 import { DataEntryFormDesignerModal } from './components/forms/DataEntryFormDesignerModal';
 import { DataEntryFormRuntime } from './components/forms/DataEntryFormRuntime';
+import { FormWorkspaceView } from './components/forms/FormWorkspaceView';
+import { UnsavedChangesModal } from './components/dialogs/UnsavedChangesModal';
+import { SaveAsModal } from './components/dialogs/SaveAsModal';
 import { ValidationInspectorPanel } from './components/canvas/ValidationInspectorPanel';
 import { RecordNavigationBar } from './components/canvas/RecordNavigationBar';
 import { ExcelConnectWizardModal } from './components/dialogs/ExcelConnectWizardModal';
@@ -75,6 +79,21 @@ import { calculateGS1CheckDigit } from './services/gs1Engine';
 import { createTemplateSnapshot, calculateShortChecksum } from './services/snapshotService';
 import { apiService } from './services/apiService';
 import { setGlobalDatasets } from './services/dataSourceEngine';
+import {
+  serializeBarcodeFlowDocument,
+  deserializeBarcodeFlowDocument,
+  promptNativeSaveAsDialog,
+  saveDocumentToDisk,
+  promptNativeOpenDialog,
+  readDocumentFromDisk,
+  checkFileExistsOnDisk,
+  exitDesktopApplication,
+  getRecentDocuments,
+  addRecentDocument,
+  removeRecentDocument,
+  clearRecentDocuments,
+} from './services/documentFileService';
+import { RecentDocumentEntry } from './types';
 import { ZoomIn, ZoomOut, Maximize2, ShieldCheck, ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export default function App() {
@@ -280,8 +299,60 @@ export default function App() {
   const [recordSearchFilter, setRecordSearchFilter] = useState<string>('');
   const [isRefreshingRecords, setIsRefreshingRecords] = useState<boolean>(false);
 
-  // Current Template Reference
-  const rawTemplate = templates.find((t) => t.id === currentTemplateId) || templates[0] || INITIAL_TEMPLATES[0];
+  // --- MULTI-DOCUMENT WORKSPACE STATE ---
+  const [openDocuments, setOpenDocuments] = useState<OpenDocument[]>(() => {
+    const initTpl = INITIAL_TEMPLATES[0];
+    return [
+      {
+        instanceId: `doc-${Date.now()}-1`,
+        documentId: initTpl.id,
+        type: 'template',
+        name: initTpl.name || 'Template 1',
+        isDirty: false,
+        isNew: false,
+        template: initTpl,
+        selectedElementIds: [],
+        history: { entries: [initTpl.elements || []], index: 0 },
+        viewState: { zoom: 1.25, panX: 40, panY: 40 },
+        dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+      },
+    ];
+  });
+
+  const [activeDocumentInstanceId, setActiveDocumentInstanceId] = useState<string>(() => {
+    return openDocuments[0]?.instanceId || 'doc-1';
+  });
+
+  const [unsavedDocModal, setUnsavedDocModal] = useState<{
+    isOpen: boolean;
+    instanceId: string;
+    documentName: string;
+    action: 'close' | 'closeAll' | 'closeOthers';
+  } | null>(null);
+  const [isSaveAsModalOpen, setIsSaveAsModalOpen] = useState(false);
+  const [recentDocuments, setRecentDocuments] = useState<RecentDocumentEntry[]>(() => getRecentDocuments());
+
+  // Application exit warning for dirty documents
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const hasDirty = openDocuments.some((d) => d.isDirty);
+      if (hasDirty) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes in open documents. Are you sure you want to exit?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [openDocuments]);
+
+  // Derived Active Document
+  const activeDocument = useMemo(() => {
+    return openDocuments.find((d) => d.instanceId === activeDocumentInstanceId) || openDocuments[0] || null;
+  }, [openDocuments, activeDocumentInstanceId]);
+
+  // Current Template Reference (strictly derived from active document if template, or fallback)
+  const rawTemplate = (activeDocument?.type === 'template' ? activeDocument.template : null) || templates.find((t) => t.id === currentTemplateId) || templates[0] || INITIAL_TEMPLATES[0];
   const currentTemplate: LabelTemplate = {
     ...rawTemplate,
     elements: rawTemplate?.elements || [],
@@ -451,9 +522,24 @@ export default function App() {
     (updates: Partial<LabelTemplate>) => {
       let templateToSync: LabelTemplate | null = null;
 
+      setOpenDocuments((prev) =>
+        prev.map((doc) => {
+          if (doc.instanceId !== activeDocumentInstanceId) return doc;
+          const baseT = doc.template || currentTemplate;
+          const updated = { ...baseT, ...updates, updatedAt: new Date().toISOString() };
+          templateToSync = updated;
+          return {
+            ...doc,
+            isDirty: true,
+            template: updated,
+            name: updates.name || doc.name,
+          };
+        })
+      );
+
       setTemplates((prev) =>
         prev.map((t) => {
-          if (t.id !== currentTemplateId) return t;
+          if (t.id !== currentTemplate.id && t.id !== currentTemplateId) return t;
 
           // If template is frozen in approval or approved and layout/elements are modified:
           const isFrozen = t.status === 'pending_level_1' || t.status === 'pending_level_2' || t.status === 'approved' || t.status === 'submitted';
@@ -491,7 +577,7 @@ export default function App() {
         }
       }, 2000);
     },
-    [currentTemplateId]
+    [activeDocumentInstanceId, currentTemplate, currentTemplateId]
   );
 
   // Update Elements in Active Template
@@ -1437,33 +1523,751 @@ export default function App() {
     setIsNewDocWizardOpen(true);
   };
 
-  const handleSaveTemplate = async () => {
-    const updatedTags = Array.from(new Set([...(currentTemplate.tags || []), 'Draft']));
-    const savedTemplate: LabelTemplate = {
-      ...currentTemplate,
-      status: currentTemplate.status === 'published' || currentTemplate.status === 'approved' ? currentTemplate.status : 'draft',
-      tags: updatedTags,
+  // --- MULTI-DOCUMENT TAB HANDLERS ---
+  const handleSelectTab = useCallback(
+    (targetInstanceId: string) => {
+      if (targetInstanceId === activeDocumentInstanceId) return;
+
+      // 1. Save state of current active document
+      setOpenDocuments((prev) =>
+        prev.map((doc) => {
+          if (doc.instanceId === activeDocumentInstanceId) {
+            return {
+              ...doc,
+              selectedElementIds,
+              history: { entries: history, index: historyIndex },
+              viewState: { zoom: viewport.zoom, panX: viewport.panX, panY: viewport.panY },
+              dataState: {
+                currentRecordIndex: viewport.previewRecordIndex,
+                selectedRecordIndices,
+              },
+            };
+          }
+          return doc;
+        })
+      );
+
+      // 2. Find target doc and restore its isolated state
+      const targetDoc = openDocuments.find((d) => d.instanceId === targetInstanceId);
+      if (targetDoc) {
+        setActiveDocumentInstanceId(targetInstanceId);
+        if (targetDoc.documentId) {
+          setCurrentTemplateId(targetDoc.documentId);
+        }
+        setSelectedElementIds(targetDoc.selectedElementIds || []);
+        if (targetDoc.history && targetDoc.history.entries && targetDoc.history.entries.length > 0) {
+          setHistory(targetDoc.history.entries);
+          setHistoryIndex(targetDoc.history.index);
+        } else if (targetDoc.template) {
+          setHistory([targetDoc.template.elements || []]);
+          setHistoryIndex(0);
+        }
+        if (targetDoc.viewState) {
+          setViewport((prev) => ({
+            ...prev,
+            zoom: targetDoc.viewState.zoom,
+            panX: targetDoc.viewState.panX,
+            panY: targetDoc.viewState.panY,
+            previewRecordIndex: targetDoc.dataState?.currentRecordIndex || 0,
+          }));
+        }
+        if (targetDoc.dataState?.selectedRecordIndices) {
+          setSelectedRecordIndices(targetDoc.dataState.selectedRecordIndices);
+        }
+      }
+    },
+    [activeDocumentInstanceId, openDocuments, selectedElementIds, history, historyIndex, viewport, selectedRecordIndices]
+  );
+
+  const handleNewTemplateTab = useCallback(() => {
+    const templateDocs = openDocuments.filter((d) => d.type === 'template');
+    const docNumber = templateDocs.length + 1;
+    const name = `Template ${docNumber}`;
+    const newTpl: LabelTemplate = {
+      id: `tmpl-${Date.now()}`,
+      name,
+      description: 'Standard Label Template',
+      category: 'Logistics',
+      version: '1.0',
+      status: 'draft',
+      tags: ['Draft'],
+      dimensions: { width: 100, height: 75, unit: 'mm', dpi: 300, orientation: 'landscape' },
+      margins: { top: 2, right: 2, bottom: 2, left: 2, bleed: 1, safeZone: 2 },
+      elements: [],
+      variables: [],
+      sampleRecords: [{}],
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      createdBy: currentTemplate.createdBy || currentUser.name,
+      createdBy: currentUser.name,
     };
 
-    setTemplates((prev) => {
-      const exists = prev.some((t) => t.id === savedTemplate.id);
-      if (exists) {
-        return prev.map((t) => (t.id === savedTemplate.id ? savedTemplate : t));
+    const newDoc: OpenDocument = {
+      instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      documentId: newTpl.id,
+      type: 'template',
+      name,
+      isDirty: false,
+      isNew: true,
+      template: newTpl,
+      selectedElementIds: [],
+      history: { entries: [[]], index: 0 },
+      viewState: { zoom: 1.25, panX: 40, panY: 40 },
+      dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+    };
+
+    setOpenDocuments((prev) => [...prev, newDoc]);
+    setActiveDocumentInstanceId(newDoc.instanceId);
+    setCurrentTemplateId(newTpl.id);
+    setSelectedElementIds([]);
+    setHistory([[]]);
+    setHistoryIndex(0);
+    setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
+    showToast(`Created new tab "${name}"`, 'success');
+  }, [openDocuments, currentUser.name]);
+
+  const handleNewFormTab = useCallback(() => {
+    const formDocs = openDocuments.filter((d) => d.type === 'form');
+    const docNumber = formDocs.length + 1;
+    const name = `Form ${docNumber}`;
+
+    const newDoc: OpenDocument = {
+      instanceId: `doc-form-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      documentId: null,
+      type: 'form',
+      name,
+      isDirty: false,
+      isNew: true,
+      form: {
+        id: `form-${Date.now()}`,
+        title: `${name} - Production Data Entry`,
+        description: 'Operator data entry form for manual variables before label print.',
+        controls: [
+          {
+            id: 'ctrl-1',
+            type: 'text',
+            label: 'Batch / Lot Number',
+            boundField: 'BATCH_NO',
+            placeholder: 'e.g. LOT-2026-X8',
+            defaultValue: 'LOT-2026-X8',
+            order: 0,
+            colSpan: 1,
+            validation: { required: true },
+          },
+          {
+            id: 'ctrl-2',
+            type: 'date',
+            label: 'Manufacturing Date',
+            boundField: 'MFG_DATE',
+            defaultValue: new Date().toISOString().split('T')[0],
+            order: 1,
+            colSpan: 1,
+          },
+          {
+            id: 'ctrl-3',
+            type: 'number',
+            label: 'Print Quantity (Copies)',
+            boundField: 'COPIES',
+            defaultValue: 1,
+            order: 2,
+            colSpan: 1,
+            validation: { min: 1, max: 9999 },
+          },
+        ],
+        showPreview: true,
+        promptBeforePrint: true,
+        autoSubmitOnScan: false,
+        defaultCopies: 1,
+      },
+      selectedElementIds: [],
+      history: { entries: [[]], index: 0 },
+      viewState: { zoom: 1.0, panX: 0, panY: 0 },
+    };
+
+    setOpenDocuments((prev) => [...prev, newDoc]);
+    setActiveDocumentInstanceId(newDoc.instanceId);
+    showToast(`Created new form tab "${name}"`, 'success');
+  }, [openDocuments]);
+
+  const handlePerformCloseTab = useCallback(
+    (instanceId: string) => {
+      const idx = openDocuments.findIndex((d) => d.instanceId === instanceId);
+      if (idx === -1) return;
+
+      const remaining = openDocuments.filter((d) => d.instanceId !== instanceId);
+
+      if (remaining.length === 0) {
+        const freshTpl = INITIAL_TEMPLATES[0];
+        const freshDoc: OpenDocument = {
+          instanceId: `doc-${Date.now()}`,
+          documentId: freshTpl.id,
+          type: 'template',
+          name: 'Template 1',
+          isDirty: false,
+          isNew: false,
+          template: freshTpl,
+          selectedElementIds: [],
+          history: { entries: [freshTpl.elements || []], index: 0 },
+          viewState: { zoom: 1.25, panX: 40, panY: 40 },
+          dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+        };
+        setOpenDocuments([freshDoc]);
+        setActiveDocumentInstanceId(freshDoc.instanceId);
+        setCurrentTemplateId(freshTpl.id);
+        setSelectedElementIds([]);
+        setHistory([freshTpl.elements || []]);
+        setHistoryIndex(0);
+        return;
       }
-      return [savedTemplate, ...prev];
-    });
 
-    logAction('EDIT_TEMPLATE', `Saved template "${savedTemplate.name}" to My Drafts`);
-    showToast(`Template "${savedTemplate.name}" saved to database via API!`, 'success');
+      setOpenDocuments(remaining);
 
-    try {
-      await apiService.templates.save(savedTemplate);
-    } catch (err) {
-      console.warn('API error saving template:', err);
+      if (activeDocumentInstanceId === instanceId) {
+        const nextActive = remaining[idx] || remaining[idx - 1] || remaining[0];
+        if (nextActive) {
+          setActiveDocumentInstanceId(nextActive.instanceId);
+          if (nextActive.documentId) setCurrentTemplateId(nextActive.documentId);
+          setSelectedElementIds(nextActive.selectedElementIds || []);
+          if (nextActive.history?.entries?.length) {
+            setHistory(nextActive.history.entries);
+            setHistoryIndex(nextActive.history.index);
+          } else if (nextActive.template) {
+            setHistory([nextActive.template.elements || []]);
+            setHistoryIndex(0);
+          }
+          if (nextActive.viewState) {
+            setViewport((prev) => ({
+              ...prev,
+              zoom: nextActive.viewState.zoom,
+              panX: nextActive.viewState.panX,
+              panY: nextActive.viewState.panY,
+              previewRecordIndex: nextActive.dataState?.currentRecordIndex || 0,
+            }));
+          }
+        }
+      }
+    },
+    [openDocuments, activeDocumentInstanceId]
+  );
+
+  const handleCloseTab = useCallback(
+    (instanceId: string) => {
+      const doc = openDocuments.find((d) => d.instanceId === instanceId);
+      if (!doc) return;
+
+      if (doc.isDirty) {
+        setUnsavedDocModal({
+          isOpen: true,
+          instanceId,
+          documentName: doc.name,
+          action: 'close',
+        });
+      } else {
+        handlePerformCloseTab(instanceId);
+      }
+    },
+    [openDocuments, handlePerformCloseTab]
+  );
+
+  const handleSaveDocumentAs = useCallback(
+    async (instanceId: string, customName?: string, description?: string) => {
+      const orig = openDocuments.find((d) => d.instanceId === instanceId) || activeDocument;
+      if (!orig) return;
+
+      const origTpl = orig.template || currentTemplate;
+      const defaultFileName = customName || orig.name || origTpl.name || 'ProductLabel';
+
+      try {
+        const dialogRes = await promptNativeSaveAsDialog(defaultFileName);
+        if (!dialogRes || dialogRes.canceled || !dialogRes.filePath) {
+          return; // User cancelled dialog
+        }
+
+        const targetFilePath = dialogRes.filePath;
+        const targetFileName = dialogRes.fileName || targetFilePath.split(/[\\/]/).pop() || 'ProductLabel.bfl';
+        const cleanName = targetFileName.replace(/\.[^.]+$/, '');
+
+        const newId = orig.documentId || `tmpl-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+        const updatedTemplate: LabelTemplate = {
+          ...origTpl,
+          id: newId,
+          name: cleanName,
+          description: description || origTpl.description || 'Standard Label Template',
+          status: 'draft',
+          tags: Array.from(new Set([...(origTpl.tags || []), 'Draft'])),
+          updatedAt: new Date().toISOString(),
+          createdBy: currentUser.name,
+        };
+
+        const targetDoc: OpenDocument = {
+          ...orig,
+          name: cleanName,
+          filePath: targetFilePath,
+          documentId: newId,
+          template: updatedTemplate,
+          isDirty: false,
+          isNew: false,
+        };
+
+        // Perform atomic disk write
+        const saveRes = await saveDocumentToDisk(targetFilePath, targetDoc);
+        if (!saveRes.success) {
+          showToast(`Save As failed: ${saveRes.error}`, 'error');
+          return;
+        }
+
+        // Local cache & API backup
+        try {
+          await apiService.templates.save(updatedTemplate);
+          const cached = JSON.parse(localStorage.getItem('barcodeflow_templates_cache') || '[]');
+          const updatedCache = [updatedTemplate, ...cached.filter((c: any) => c.id !== updatedTemplate.id)];
+          localStorage.setItem('barcodeflow_templates_cache', JSON.stringify(updatedCache.slice(0, 50)));
+        } catch { }
+
+        setTemplates((prev) => {
+          const exists = prev.some((t) => t.id === updatedTemplate.id);
+          return exists ? prev.map((t) => (t.id === updatedTemplate.id ? updatedTemplate : t)) : [updatedTemplate, ...prev];
+        });
+        setCurrentTemplateId(updatedTemplate.id);
+
+        // Update active tab to point to the saved file
+        setOpenDocuments((prev) =>
+          prev.map((d) =>
+            d.instanceId === orig.instanceId
+              ? {
+                  ...d,
+                  name: cleanName,
+                  filePath: targetFilePath,
+                  documentId: updatedTemplate.id,
+                  template: updatedTemplate,
+                  isDirty: false,
+                  isNew: false,
+                }
+              : d
+          )
+        );
+
+        // Update Recent Documents list
+        const updatedRecent = addRecentDocument(targetFilePath, targetFileName);
+        setRecentDocuments(updatedRecent);
+
+        setIsSaveAsModalOpen(false);
+        showToast(`Saved: ${targetFileName}`, 'success');
+        logAction('CREATE_TEMPLATE', `Saved document as "${targetFileName}" to ${targetFilePath}`);
+      } catch (err: any) {
+        console.error('Save As error:', err);
+        showToast(`Save As failed: ${err?.message || 'File system error'}`, 'error');
+      }
+    },
+    [openDocuments, activeDocument, currentTemplate, currentUser.name]
+  );
+
+  const handleSaveDocument = useCallback(
+    async (instanceId: string) => {
+      const doc = openDocuments.find((d) => d.instanceId === instanceId);
+      if (!doc) return;
+
+      if (doc.type === 'form') {
+        setOpenDocuments((prev) =>
+          prev.map((d) => (d.instanceId === instanceId ? { ...d, isDirty: false } : d))
+        );
+        showToast(`Form "${doc.name}" saved!`, 'success');
+        return;
+      }
+
+      // If document has no file path, first-time save MUST open native Save As dialog
+      if (!doc.filePath) {
+        await handleSaveDocumentAs(instanceId);
+        return;
+      }
+
+      const tpl = doc.template || currentTemplate;
+      const savedTemplate: LabelTemplate = {
+        ...tpl,
+        id: doc.documentId || tpl.id || `tmpl-${Date.now()}`,
+        name: doc.name || tpl.name || 'Untitled Label',
+        status: tpl.status === 'published' || tpl.status === 'approved' ? tpl.status : 'draft',
+        updatedAt: new Date().toISOString(),
+        createdBy: tpl.createdBy || currentUser.name,
+      };
+
+      const targetDoc: OpenDocument = {
+        ...doc,
+        template: savedTemplate,
+      };
+
+      try {
+        // Disk write to existing filePath directly
+        const saveRes = await saveDocumentToDisk(doc.filePath, targetDoc);
+        if (!saveRes.success) {
+          showToast(`Save failed: ${saveRes.error}. Changes retained in memory.`, 'error');
+          return;
+        }
+
+        try {
+          await apiService.templates.save(savedTemplate);
+          const cached = JSON.parse(localStorage.getItem('barcodeflow_templates_cache') || '[]');
+          const updatedCache = [savedTemplate, ...cached.filter((c: any) => c.id !== savedTemplate.id)];
+          localStorage.setItem('barcodeflow_templates_cache', JSON.stringify(updatedCache.slice(0, 50)));
+        } catch { }
+
+        // Reset dirty state ONLY after successful disk write
+        setOpenDocuments((prev) =>
+          prev.map((d) =>
+            d.instanceId === instanceId
+              ? { ...d, isDirty: false, isNew: false, template: savedTemplate, documentId: savedTemplate.id, name: savedTemplate.name }
+              : d
+          )
+        );
+
+        setTemplates((prev) => {
+          const exists = prev.some((t) => t.id === savedTemplate.id);
+          if (exists) {
+            return prev.map((t) => (t.id === savedTemplate.id ? savedTemplate : t));
+          }
+          return [savedTemplate, ...prev];
+        });
+
+        const updatedRecent = addRecentDocument(doc.filePath, saveRes.fileName || doc.name);
+        setRecentDocuments(updatedRecent);
+
+        showToast(`Saved: ${saveRes.fileName || doc.name}`, 'success');
+        logAction('EDIT_TEMPLATE', `Saved document "${doc.name}" to ${doc.filePath}`);
+      } catch (err: any) {
+        console.error('Failed to save document:', err);
+        showToast(`Save failed: ${err?.message || 'File system error'}. Changes retained in memory.`, 'error');
+      }
+    },
+    [openDocuments, currentTemplate, currentUser.name, handleSaveDocumentAs]
+  );
+
+  const handleSaveTemplate = async () => {
+    if (activeDocumentInstanceId) {
+      await handleSaveDocument(activeDocumentInstanceId);
     }
   };
+
+  const handleSaveAllDocuments = useCallback(async () => {
+    const dirtyDocs = openDocuments.filter((d) => d.isDirty);
+    if (dirtyDocs.length === 0) {
+      showToast('All open documents are already saved.', 'info');
+      return;
+    }
+
+    const successfulInstanceIds: string[] = [];
+    const failedNames: string[] = [];
+
+    for (const doc of dirtyDocs) {
+      if (doc.type === 'template') {
+        if (!doc.filePath) {
+          // Unsaved new document -> prompt Save As dialog
+          try {
+            await handleSaveDocumentAs(doc.instanceId);
+            successfulInstanceIds.push(doc.instanceId);
+          } catch {
+            failedNames.push(doc.name);
+          }
+        } else {
+          // Direct disk save to existing file path
+          const tpl = doc.template || currentTemplate;
+          const savedTemplate: LabelTemplate = {
+            ...tpl,
+            id: doc.documentId || tpl.id || `tmpl-${Date.now()}`,
+            name: doc.name || tpl.name || 'Untitled Label',
+            updatedAt: new Date().toISOString(),
+            createdBy: tpl.createdBy || currentUser.name,
+          };
+          const saveRes = await saveDocumentToDisk(doc.filePath, { ...doc, template: savedTemplate });
+          if (saveRes.success) {
+            successfulInstanceIds.push(doc.instanceId);
+            try {
+              await apiService.templates.save(savedTemplate);
+            } catch { }
+            addRecentDocument(doc.filePath, saveRes.fileName || doc.name);
+          } else {
+            failedNames.push(doc.name);
+          }
+        }
+      } else {
+        successfulInstanceIds.push(doc.instanceId);
+      }
+    }
+
+    // Only clear dirty state for documents that succeeded
+    setOpenDocuments((prev) =>
+      prev.map((d) => (successfulInstanceIds.includes(d.instanceId) ? { ...d, isDirty: false, isNew: false } : d))
+    );
+    setRecentDocuments(getRecentDocuments());
+
+    if (failedNames.length === 0) {
+      showToast(`Successfully saved all ${successfulInstanceIds.length} modified document(s)!`, 'success');
+      logAction('SYSTEM_CONFIG', `Saved all ${successfulInstanceIds.length} dirty open documents`);
+    } else {
+      showToast(`Saved ${successfulInstanceIds.length} document(s). Failed: ${failedNames.join(', ')}`, 'error');
+    }
+  }, [openDocuments, currentTemplate, currentUser.name, handleSaveDocumentAs]);
+
+  const handleOpenDocumentFile = useCallback(async () => {
+    try {
+      const openRes = await promptNativeOpenDialog();
+      if (!openRes || openRes.canceled || !openRes.filePath) {
+        return; // User cancelled
+      }
+
+      const filePath = openRes.filePath;
+      const normalizedPath = filePath.toLowerCase().replace(/\\/g, '/');
+
+      // Check if file is already open in one of the active tabs
+      const existingDoc = openDocuments.find(
+        (d) => d.filePath && d.filePath.toLowerCase().replace(/\\/g, '/') === normalizedPath
+      );
+
+      if (existingDoc) {
+        setActiveDocumentInstanceId(existingDoc.instanceId);
+        if (existingDoc.documentId) setCurrentTemplateId(existingDoc.documentId);
+        showToast(`Activated already open document: ${existingDoc.name}`, 'info');
+        return;
+      }
+
+      // Read file from disk
+      const readRes = await readDocumentFromDisk(filePath);
+      if (!readRes.success || !readRes.content) {
+        showToast(`Failed to open document: ${readRes.error}`, 'error');
+        return;
+      }
+
+      // Deserialize .bfl or JSON into BarcodeFlow document
+      const docFile = deserializeBarcodeFlowDocument(readRes.content, filePath);
+      const loadedTemplate = docFile.template || INITIAL_TEMPLATES[0];
+
+      const newDoc: OpenDocument = {
+        instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        documentId: loadedTemplate.id,
+        type: 'template',
+        filePath: filePath,
+        name: docFile.name || loadedTemplate.name || 'ProductLabel',
+        isDirty: false,
+        isNew: false,
+        template: loadedTemplate,
+        selectedElementIds: [],
+        history: { entries: [loadedTemplate.elements || []], index: 0 },
+        viewState: { zoom: 1.25, panX: 40, panY: 40 },
+        dataState: {
+          currentRecordIndex: 0,
+          selectedRecordIndices: [],
+        },
+      };
+
+      setTemplates((prev) => {
+        const exists = prev.some((t) => t.id === loadedTemplate.id);
+        return exists ? prev.map((t) => (t.id === loadedTemplate.id ? loadedTemplate : t)) : [loadedTemplate, ...prev];
+      });
+
+      setOpenDocuments((prev) => [...prev, newDoc]);
+      setActiveDocumentInstanceId(newDoc.instanceId);
+      setCurrentTemplateId(loadedTemplate.id);
+      setSelectedElementIds([]);
+      setHistory([loadedTemplate.elements || []]);
+      setHistoryIndex(0);
+      setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
+
+      // Add to Recent Documents list
+      const updatedRecent = addRecentDocument(filePath, docFile.name || loadedTemplate.name);
+      setRecentDocuments(updatedRecent);
+
+      showToast(`Opened: ${docFile.name || loadedTemplate.name}`, 'success');
+      logAction('CREATE_TEMPLATE', `Opened document from disk: ${filePath}`);
+    } catch (err: any) {
+      console.error('Open document error:', err);
+      showToast(`Failed to open document: ${err?.message || 'File read error'}`, 'error');
+    }
+  }, [openDocuments]);
+
+  const handleOpenRecentDocument = useCallback(
+    async (filePath: string) => {
+      try {
+        const fileCheck = await checkFileExistsOnDisk(filePath);
+        if (!fileCheck) {
+          showToast(`File not found: ${filePath}. Removed from Recent list.`, 'error');
+          const updated = removeRecentDocument(filePath);
+          setRecentDocuments(updated);
+          return;
+        }
+
+        const normalizedPath = filePath.toLowerCase().replace(/\\/g, '/');
+        const existingDoc = openDocuments.find(
+          (d) => d.filePath && d.filePath.toLowerCase().replace(/\\/g, '/') === normalizedPath
+        );
+
+        if (existingDoc) {
+          setActiveDocumentInstanceId(existingDoc.instanceId);
+          if (existingDoc.documentId) setCurrentTemplateId(existingDoc.documentId);
+          showToast(`Activated open document: ${existingDoc.name}`, 'info');
+          return;
+        }
+
+        const readRes = await readDocumentFromDisk(filePath);
+        if (!readRes.success || !readRes.content) {
+          showToast(`Failed to open recent document: ${readRes.error}`, 'error');
+          return;
+        }
+
+        const docFile = deserializeBarcodeFlowDocument(readRes.content, filePath);
+        const loadedTemplate = docFile.template || INITIAL_TEMPLATES[0];
+
+        const newDoc: OpenDocument = {
+          instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          documentId: loadedTemplate.id,
+          type: 'template',
+          filePath: filePath,
+          name: docFile.name || loadedTemplate.name || 'ProductLabel',
+          isDirty: false,
+          isNew: false,
+          template: loadedTemplate,
+          selectedElementIds: [],
+          history: { entries: [loadedTemplate.elements || []], index: 0 },
+          viewState: { zoom: 1.25, panX: 40, panY: 40 },
+          dataState: {
+            currentRecordIndex: 0,
+            selectedRecordIndices: [],
+          },
+        };
+
+        setTemplates((prev) => {
+          const exists = prev.some((t) => t.id === loadedTemplate.id);
+          return exists ? prev.map((t) => (t.id === loadedTemplate.id ? loadedTemplate : t)) : [loadedTemplate, ...prev];
+        });
+
+        setOpenDocuments((prev) => [...prev, newDoc]);
+        setActiveDocumentInstanceId(newDoc.instanceId);
+        setCurrentTemplateId(loadedTemplate.id);
+        setSelectedElementIds([]);
+        setHistory([loadedTemplate.elements || []]);
+        setHistoryIndex(0);
+        setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
+
+        const updatedRecent = addRecentDocument(filePath, docFile.name || loadedTemplate.name);
+        setRecentDocuments(updatedRecent);
+
+        showToast(`Opened: ${docFile.name || loadedTemplate.name}`, 'success');
+        logAction('CREATE_TEMPLATE', `Opened recent document: ${filePath}`);
+      } catch (err: any) {
+        console.error('Open recent document error:', err);
+        showToast(`Failed to open recent file: ${err?.message || 'Read error'}`, 'error');
+      }
+    },
+    [openDocuments]
+  );
+
+  const handleClearRecentDocuments = useCallback(() => {
+    clearRecentDocuments();
+    setRecentDocuments([]);
+    showToast('Recent documents list cleared', 'info');
+  }, []);
+
+  const handleCloseAllDocuments = useCallback(() => {
+    const dirtyDocs = openDocuments.filter((d) => d.isDirty);
+    if (dirtyDocs.length > 0) {
+      setUnsavedDocModal({
+        isOpen: true,
+        instanceId: dirtyDocs[0].instanceId,
+        documentName: dirtyDocs[0].name,
+        action: 'closeAll',
+      });
+      return;
+    }
+
+    // All clean -> create fresh clean document
+    const freshTpl: LabelTemplate = {
+      id: `tmpl-${Date.now()}`,
+      name: 'Template 1',
+      description: 'Standard Label Template',
+      category: 'Logistics',
+      version: '1.0',
+      status: 'draft',
+      tags: ['Draft'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      createdBy: currentUser.name,
+      dimensions: { width: 100, height: 75, unit: 'mm', dpi: 300, orientation: 'landscape' },
+      margins: { top: 2, right: 2, bottom: 2, left: 2, bleed: 1, safeZone: 2 },
+      elements: [],
+      variables: [],
+      sampleRecords: [{}],
+    };
+
+    const freshDoc: OpenDocument = {
+      instanceId: `doc-${Date.now()}`,
+      documentId: freshTpl.id,
+      type: 'template',
+      name: 'Template 1',
+      isDirty: false,
+      isNew: false,
+      template: freshTpl,
+      selectedElementIds: [],
+      history: { entries: [[]], index: 0 },
+      viewState: { zoom: 1.25, panX: 40, panY: 40 },
+      dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+    };
+
+    setOpenDocuments([freshDoc]);
+    setActiveDocumentInstanceId(freshDoc.instanceId);
+    setCurrentTemplateId(freshTpl.id);
+    setSelectedElementIds([]);
+    setHistory([[]]);
+    setHistoryIndex(0);
+    showToast('Closed all documents', 'info');
+  }, [openDocuments, currentUser.name]);
+
+  const handleDuplicateDocument = useCallback(
+    (instanceId: string) => {
+      const orig = openDocuments.find((d) => d.instanceId === instanceId);
+      if (!orig) return;
+
+      if (orig.type === 'template' && orig.template) {
+        const copyTpl: LabelTemplate = {
+          ...orig.template,
+          id: `tmpl-${Date.now()}`,
+          name: `${orig.name} (Copy)`,
+          status: 'draft',
+          tags: Array.from(new Set([...(orig.template.tags || []), 'Draft'])),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        const copyDoc: OpenDocument = {
+          instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          documentId: copyTpl.id,
+          type: 'template',
+          name: `${orig.name} (Copy)`,
+          isDirty: true,
+          isNew: true,
+          template: copyTpl,
+          selectedElementIds: [],
+          history: { entries: [copyTpl.elements || []], index: 0 },
+          viewState: { ...orig.viewState },
+          dataState: { ...orig.dataState, currentRecordIndex: 0, selectedRecordIndices: [] },
+        };
+        setOpenDocuments((prev) => [...prev, copyDoc]);
+        setActiveDocumentInstanceId(copyDoc.instanceId);
+        showToast(`Duplicated tab "${copyDoc.name}"`, 'success');
+      }
+    },
+    [openDocuments]
+  );
+
+  const handleCloseOthers = useCallback(
+    (instanceId: string) => {
+      const target = openDocuments.find((d) => d.instanceId === instanceId);
+      if (!target) return;
+      setOpenDocuments([target]);
+      setActiveDocumentInstanceId(target.instanceId);
+      showToast(`Closed all other tabs except "${target.name}"`, 'info');
+    },
+    [openDocuments]
+  );
+
+  const handleCloseAll = useCallback(() => {
+    handleCloseAllDocuments();
+  }, [handleCloseAllDocuments]);
 
   const handleDuplicateTemplate = async (id: string) => {
     try {
@@ -1509,9 +2313,19 @@ export default function App() {
     }
   };
 
-  const handleOpenTemplateFile = () => {
-    handleImportJSON();
-  };
+  const handleExitApp = useCallback(() => {
+    const dirtyDocs = openDocuments.filter((d) => d.isDirty);
+    if (dirtyDocs.length > 0) {
+      setUnsavedDocModal({
+        isOpen: true,
+        instanceId: dirtyDocs[0].instanceId,
+        documentName: dirtyDocs[0].name,
+        action: 'closeAll',
+      });
+      return;
+    }
+    exitDesktopApplication();
+  }, [openDocuments]);
 
   // Keyboard Shortcuts Listener (Strictly for Designer View)
   useEffect(() => {
@@ -1521,70 +2335,166 @@ export default function App() {
         return;
       }
 
-      // Avoid capturing keystrokes when editing inputs or textboxes
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
-        return;
-      }
+      const target = e.target as HTMLElement | null;
+      const isInputFocused =
+        !!target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable ||
+          target.getAttribute('contenteditable') === 'true');
 
+      // 1. GLOBAL SHORTCUTS (Active even when input/form has focus)
       if (e.ctrlKey || e.metaKey) {
+        // Ctrl + S -> Save Active Document
+        if (!e.shiftKey && (e.key === 's' || e.key === 'S')) {
+          e.preventDefault();
+          if (activeDocumentInstanceId) {
+            handleSaveDocument(activeDocumentInstanceId);
+          }
+          return;
+        }
+
+        // Ctrl + Shift + S -> Native Save As
+        if (e.shiftKey && (e.key === 's' || e.key === 'S')) {
+          e.preventDefault();
+          if (activeDocumentInstanceId) {
+            handleSaveDocumentAs(activeDocumentInstanceId);
+          }
+          return;
+        }
+
+        // Ctrl + P -> Open Print Center
+        if (e.key === 'p' || e.key === 'P') {
+          e.preventDefault();
+          setIsPrintDialogOpen(true);
+          return;
+        }
+
+        // Ctrl + N -> New Document Wizard
+        if (!isInputFocused && (e.key === 'n' || e.key === 'N')) {
+          e.preventDefault();
+          setIsNewDocWizardOpen(true);
+          return;
+        }
+
+        // Ctrl + O -> Open Native BarcodeFlow Document
+        if (!isInputFocused && (e.key === 'o' || e.key === 'O')) {
+          e.preventDefault();
+          handleOpenDocumentFile();
+          return;
+        }
+
+        // Ctrl + W / Ctrl + F4 -> Close Active Tab
+        if (e.key === 'w' || e.key === 'W' || e.key === 'F4') {
+          e.preventDefault();
+          if (activeDocumentInstanceId) {
+            handleCloseTab(activeDocumentInstanceId);
+          }
+          return;
+        }
+
+        // Ctrl + Tab / Ctrl + Shift + Tab -> Tab Navigation
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          if (openDocuments.length > 1) {
+            const curIdx = openDocuments.findIndex((d) => d.instanceId === activeDocumentInstanceId);
+            if (e.shiftKey) {
+              const prevIdx = curIdx > 0 ? curIdx - 1 : openDocuments.length - 1;
+              handleSelectTab(openDocuments[prevIdx].instanceId);
+            } else {
+              const nextIdx = (curIdx + 1) % openDocuments.length;
+              handleSelectTab(openDocuments[nextIdx].instanceId);
+            }
+          }
+          return;
+        }
+
+        // If inside text input, allow native text clipboard / undo / selection
+        if (isInputFocused) {
+          return;
+        }
+
+        // Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y -> Undo / Redo
         if (e.key === 'z' || e.key === 'Z') {
           e.preventDefault();
           if (e.shiftKey) handleRedo();
           else handleUndo();
+          return;
         } else if (e.key === 'y' || e.key === 'Y') {
           e.preventDefault();
           handleRedo();
+          return;
         } else if (e.key === 'c' || e.key === 'C') {
           e.preventDefault();
           handleCopy();
+          return;
         } else if (e.key === 'x' || e.key === 'X') {
           e.preventDefault();
           handleCut();
+          return;
         } else if (e.key === 'v' || e.key === 'V') {
           e.preventDefault();
           handlePaste();
+          return;
         } else if (e.key === 'd' || e.key === 'D') {
           e.preventDefault();
           handleDuplicateSelected();
+          return;
         } else if (e.key === 'a' || e.key === 'A') {
           e.preventDefault();
           handleSelectAll();
-        } else if (e.key === 'p' || e.key === 'P') {
-          e.preventDefault();
-          setIsPrintDialogOpen(true);
+          return;
         } else if (e.key === 'e' || e.key === 'E') {
           e.preventDefault();
           setIsZplExportOpen(true);
-        } else if (e.key === 's' || e.key === 'S') {
-          e.preventDefault();
-          handleSaveTemplate();
+          return;
         } else if (e.key === '=' || e.key === '+') {
           e.preventDefault();
           setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }));
+          return;
         } else if (e.key === '-') {
           e.preventDefault();
           setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, 0.25) }));
+          return;
         } else if (e.key === '0') {
           e.preventDefault();
           handleZoomFit();
+          return;
         } else if (e.key === 'Home') {
-          // Section 10.25: Ctrl + Home -> First Record
           e.preventDefault();
           setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
+          return;
         } else if (e.key === 'End') {
-          // Section 10.25: Ctrl + End -> Last Record
           e.preventDefault();
           setViewport((prev) => ({ ...prev, previewRecordIndex: 99999999 }));
+          return;
         } else if (e.key === 'PageUp') {
-          // Section 10.25: Ctrl + PageUp -> Previous Record
           e.preventDefault();
           setViewport((prev) => ({ ...prev, previewRecordIndex: Math.max(0, prev.previewRecordIndex - 1) }));
+          return;
         } else if (e.key === 'PageDown') {
-          // Section 10.25: Ctrl + PageDown -> Next Record
           e.preventDefault();
           setViewport((prev) => ({ ...prev, previewRecordIndex: prev.previewRecordIndex + 1 }));
+          return;
         }
       } else {
+        // Non-Ctrl shortcuts
+
+        // Escape key: if modal open, do not interfere; if on canvas, clear selection & reset tool
+        if (e.key === 'Escape') {
+          if (!isInputFocused) {
+            setSelectedElementIds([]);
+            setActiveTool('select');
+          }
+          return;
+        }
+
+        // If typing in input, ignore all canvas hotkeys
+        if (isInputFocused) {
+          return;
+        }
+
         if (e.key === 'Delete' || e.key === 'Backspace') {
           e.preventDefault(); // Crucial: Prevent browser history back navigation
           handleDeleteSelected();
@@ -1641,8 +2551,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     activeView,
+    activeDocumentInstanceId,
+    openDocuments,
     selectedElementIds,
-    currentTemplate.elements,
+    currentTemplate,
+    handleSaveDocument,
+    handleSaveAllDocuments,
+    handleSelectTab,
+    handleCloseTab,
     handleUndo,
     handleRedo,
     handleCopy,
@@ -1650,6 +2566,10 @@ export default function App() {
     handlePaste,
     handleDuplicateSelected,
     handleDeleteSelected,
+    handleSelectAll,
+    handleZoomFit,
+    handleOpenDocumentFile,
+    handleSaveDocumentAs,
     updateMultipleElements,
   ]);
 
@@ -2106,34 +3026,20 @@ export default function App() {
       {activeView === 'designer' && (
         <ErrorBoundary fallbackTitle="BarcodeFlow Designer Studio Recovery">
           <MenuBar
-            onNew={handleNewTemplate}
+            onNew={() => setIsNewDocWizardOpen(true)}
             onOpenPrinterManager={() => setIsPrinterManagerOpen(true)}
-            onOpen={handleOpenTemplateFile}
+            onOpen={handleOpenDocumentFile}
+            onCloseDocument={() => handleCloseTab(activeDocumentInstanceId)}
+            onCloseAllDocuments={handleCloseAllDocuments}
             onSave={handleSaveTemplate}
-            onSaveAs={async () => {
-              const name = prompt('Enter new template name:', `${currentTemplate.name} (Copy)`);
-              if (name) {
-                const copy: LabelTemplate = {
-                  ...currentTemplate,
-                  id: `tmpl-${Date.now()}`,
-                  name,
-                  status: 'draft',
-                  tags: Array.from(new Set([...(currentTemplate.tags || []), 'Draft'])),
-                  createdAt: new Date().toISOString(),
-                  updatedAt: new Date().toISOString(),
-                  createdBy: currentUser.name,
-                };
-                setTemplates((prev) => [copy, ...prev]);
-                setCurrentTemplateId(copy.id);
-                showToast(`Saved as "${name}" in My Drafts via API!`, 'success');
-                logAction('CREATE_TEMPLATE', `Saved template as "${name}" in My Drafts`);
-                try {
-                  await apiService.templates.create(copy);
-                } catch (err) {
-                  console.warn('API save error in onSaveAs:', err);
-                }
-              }
-            }}
+            onSaveAll={handleSaveAllDocuments}
+            onSaveAs={() => handleSaveDocumentAs(activeDocumentInstanceId)}
+            onPrintPreview={() => setIsPrintDialogOpen(true)}
+            onOpenDatabaseConnection={() => setIsExcelWizardOpen(true)}
+            recentDocuments={recentDocuments}
+            onOpenRecentDocument={handleOpenRecentDocument}
+            onClearRecentDocuments={handleClearRecentDocuments}
+            onExitApp={handleExitApp}
             onExportPDF={handleExportPDF}
             onExportZPL={() => setIsZplExportOpen(true)}
             onExportJSON={handleExportJSON}
@@ -2259,9 +3165,10 @@ export default function App() {
             <ObjectToolbar
               activeTool={activeTool}
               setActiveTool={setActiveTool}
-              onNew={handleNewTemplate}
-              onOpen={handleOpenTemplateFile}
+              onNew={() => setIsNewDocWizardOpen(true)}
+              onOpen={handleOpenDocumentFile}
               onSave={handleSaveTemplate}
+              onSaveAs={() => handleSaveDocumentAs(activeDocumentInstanceId)}
               onPrint={() => setIsPrintDialogOpen(true)}
               onCut={handleCut}
               onCopy={handleCopy}
@@ -2396,70 +3303,111 @@ export default function App() {
               {/* Central Precision Interactive Canvas & Bottom Database Stepper */}
               <div className="flex-1 flex flex-col overflow-hidden relative">
                 <div className="flex-1 overflow-hidden relative">
-                  <DesignerCanvas
-                    template={currentTemplate}
-                    selectedElementIds={selectedElementIds}
-                    onSelectElements={setSelectedElementIds}
-                    onUpdateElement={updateSingleElement}
-                    onUpdateMultipleElements={updateMultipleElements}
-                    onDeleteSelected={handleDeleteSelected}
-                    onDuplicateSelected={handleDuplicateSelected}
-                    onCut={handleCut}
-                    onCopy={handleCopy}
-                    onPaste={handlePaste}
-                    onUndo={handleUndo}
-                    onRedo={handleRedo}
-                    onBringToFront={handleBringToFront}
-                    onSendToBack={handleSendToBack}
-                    onBringForward={handleBringForward}
-                    onSendBackward={handleSendBackward}
-                    onGroup={handleGroup}
-                    onUngroup={handleUngroup}
-                    onLockToggle={handleLockToggle}
-                    onOpenProperties={() => {
-                      const selEl = currentTemplate.elements.find((e) => selectedElementIds.includes(e.id));
-                      if (selEl) {
-                        if (selEl.type === 'barcode') setIsBarcodePropertiesOpen(true);
-                        else if (selEl.type === 'text') setIsTextPropertiesOpen(true);
-                        else if (selEl.type === 'shape') setIsShapePropertiesOpen(true);
-                        else setShowRightDock(true);
-                      } else {
-                        setIsPageSetupOpen(true);
-                      }
-                    }}
-                    onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
-                    onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
-                    onOpenPageSetup={() => setIsPageSetupOpen(true)}
-                    onInsertElementAt={(elPartial, xMm, yMm) => {
-                      const newEl: LabelElement = {
-                        id: `el-${Date.now()}`,
-                        name: `Element ${currentTemplate.elements.length + 1}`,
-                        type: 'text',
-                        x: xMm,
-                        y: yMm,
-                        width: 30,
-                        height: 10,
-                        rotation: 0,
-                        opacity: 1,
-                        locked: false,
-                        visible: true,
-                        zIndex: currentTemplate.elements.length + 1,
-                        ...elPartial,
-                      } as LabelElement;
-                      updateElements([...currentTemplate.elements, newEl]);
-                      setSelectedElementIds([newEl.id]);
-                      showToast(`Added ${newEl.name} at (${xMm.toFixed(1)}, ${yMm.toFixed(1)}) mm`, 'success');
-                    }}
-                    onInsertPresetAt={(presetKey, xMm, yMm) => {
-                      handleInsertPreset(presetKey);
-                    }}
-                    onBindElementToField={handleBindElementToField}
-                    onInsertBoundElementAt={handleInsertBoundElementAt}
-                    viewport={viewport}
-                    setViewport={setViewport}
-                    recordData={currentRecordData}
-                    onCursorMove={(xMm, yMm) => setCursorPos({ x: xMm, y: yMm })}
-                  />
+                  {activeDocument?.type === 'form' ? (
+                    <FormWorkspaceView
+                      document={activeDocument}
+                      onUpdateForm={(updatedForm) => {
+                        setOpenDocuments((prev) =>
+                          prev.map((d) =>
+                            d.instanceId === activeDocument.instanceId ? { ...d, isDirty: true, form: updatedForm } : d
+                          )
+                        );
+                      }}
+                      onSaveForm={(instId) => handleSaveDocument(instId)}
+                      documents={openDocuments}
+                      activeInstanceId={activeDocumentInstanceId}
+                      onSelectTab={handleSelectTab}
+                      onCloseTab={handleCloseTab}
+                      onNewTemplate={handleNewTemplateTab}
+                      onNewForm={handleNewFormTab}
+                      onSaveDoc={handleSaveDocument}
+                      onSaveAll={handleSaveAllDocuments}
+                      onDuplicateDoc={handleDuplicateDocument}
+                      onCloseOthers={handleCloseOthers}
+                      onCloseAll={handleCloseAll}
+                      activePrinterName={activePrinter?.name || defaultPrinter?.name || 'Microsoft Print to PDF'}
+                      onPrintPreview={(formData) => {
+                        setIsPrintDialogOpen(true);
+                      }}
+                    />
+                  ) : (
+                    <DesignerCanvas
+                      template={currentTemplate}
+                      selectedElementIds={selectedElementIds}
+                      onSelectElements={setSelectedElementIds}
+                      onUpdateElement={updateSingleElement}
+                      onUpdateMultipleElements={updateMultipleElements}
+                      onDeleteSelected={handleDeleteSelected}
+                      onDuplicateSelected={handleDuplicateSelected}
+                      onCut={handleCut}
+                      onCopy={handleCopy}
+                      onPaste={handlePaste}
+                      onUndo={handleUndo}
+                      onRedo={handleRedo}
+                      onBringToFront={handleBringToFront}
+                      onSendToBack={handleSendToBack}
+                      onBringForward={handleBringForward}
+                      onSendBackward={handleSendBackward}
+                      onGroup={handleGroup}
+                      onUngroup={handleUngroup}
+                      onLockToggle={handleLockToggle}
+                      onOpenProperties={() => {
+                        const selEl = currentTemplate.elements.find((e) => selectedElementIds.includes(e.id));
+                        if (selEl) {
+                          if (selEl.type === 'barcode') setIsBarcodePropertiesOpen(true);
+                          else if (selEl.type === 'text') setIsTextPropertiesOpen(true);
+                          else if (selEl.type === 'shape') setIsShapePropertiesOpen(true);
+                          else setShowRightDock(true);
+                        } else {
+                          setIsPageSetupOpen(true);
+                        }
+                      }}
+                      onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
+                      onOpenBarcodeProperties={() => setIsBarcodePropertiesOpen(true)}
+                      onOpenPageSetup={() => setIsPageSetupOpen(true)}
+                      onInsertElementAt={(elPartial, xMm, yMm) => {
+                        const newEl: LabelElement = {
+                          id: `el-${Date.now()}`,
+                          name: `Element ${currentTemplate.elements.length + 1}`,
+                          type: 'text',
+                          x: xMm,
+                          y: yMm,
+                          width: 30,
+                          height: 10,
+                          rotation: 0,
+                          opacity: 1,
+                          locked: false,
+                          visible: true,
+                          zIndex: currentTemplate.elements.length + 1,
+                          ...elPartial,
+                        } as LabelElement;
+                        updateElements([...currentTemplate.elements, newEl]);
+                        setSelectedElementIds([newEl.id]);
+                        showToast(`Added ${newEl.name} at (${xMm.toFixed(1)}, ${yMm.toFixed(1)}) mm`, 'success');
+                      }}
+                      onInsertPresetAt={(presetKey, xMm, yMm) => {
+                        handleInsertPreset(presetKey);
+                      }}
+                      onBindElementToField={handleBindElementToField}
+                      onInsertBoundElementAt={handleInsertBoundElementAt}
+                      viewport={viewport}
+                      setViewport={setViewport}
+                      recordData={currentRecordData}
+                      onCursorMove={(xMm, yMm) => setCursorPos({ x: xMm, y: yMm })}
+                      documents={openDocuments}
+                      activeInstanceId={activeDocumentInstanceId}
+                      onSelectTab={handleSelectTab}
+                      onCloseTab={handleCloseTab}
+                      onNewTemplate={handleNewTemplateTab}
+                      onNewForm={handleNewFormTab}
+                      onSaveDoc={handleSaveDocument}
+                      onSaveAll={handleSaveAllDocuments}
+                      onDuplicateDoc={handleDuplicateDocument}
+                      onCloseOthers={handleCloseOthers}
+                      onCloseAll={handleCloseAll}
+                      activePrinterName={activePrinter?.name || defaultPrinter?.name || 'Microsoft Print to PDF'}
+                    />
+                  )}
 
                   {/* Validation & Compliance Problem Inspector */}
                   <ValidationInspectorPanel
@@ -2962,6 +3910,21 @@ export default function App() {
         onFinish={async (newTmpl) => {
           setTemplates((prev) => [newTmpl, ...prev]);
           setCurrentTemplateId(newTmpl.id);
+          const newDoc: OpenDocument = {
+            instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            documentId: newTmpl.id,
+            type: 'template',
+            name: newTmpl.name,
+            isDirty: false,
+            isNew: true,
+            template: newTmpl,
+            selectedElementIds: [],
+            history: { entries: [newTmpl.elements || []], index: 0 },
+            viewState: { zoom: 1.25, panX: 40, panY: 40 },
+            dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+          };
+          setOpenDocuments((prev) => [...prev, newDoc]);
+          setActiveDocumentInstanceId(newDoc.instanceId);
           if (newTmpl.printer) {
             const matched = availablePrinters.find(
               (p) =>
@@ -2974,7 +3937,7 @@ export default function App() {
             }
           }
           setSelectedElementIds([]);
-          setHistory([newTmpl.elements]);
+          setHistory([newTmpl.elements || []]);
           setHistoryIndex(0);
           setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
           showToast(`Created new ${newTmpl.name} (${newTmpl.dimensions.width}×${newTmpl.dimensions.height} mm)`, 'success');
@@ -2986,6 +3949,26 @@ export default function App() {
           }
         }}
       />
+
+      {/* Multi-Document Unsaved Changes Confirmation Modal */}
+      {unsavedDocModal && (
+        <UnsavedChangesModal
+          isOpen={unsavedDocModal.isOpen}
+          documentName={unsavedDocModal.documentName}
+          onSave={async () => {
+            const instId = unsavedDocModal.instanceId;
+            await handleSaveDocument(instId);
+            setUnsavedDocModal(null);
+            handlePerformCloseTab(instId);
+          }}
+          onDontSave={() => {
+            const instId = unsavedDocModal.instanceId;
+            setUnsavedDocModal(null);
+            handlePerformCloseTab(instId);
+          }}
+          onCancel={() => setUnsavedDocModal(null)}
+        />
+      )}
 
       {/* P0-8: Missing / Preferred Printer Unavailable Alert Modal */}
       {missingPrinterModal?.isOpen && (
@@ -3594,6 +4577,75 @@ export default function App() {
         onSelectAll={(indices) => setSelectedRecordIndices(indices)}
         onClearSelection={() => setSelectedRecordIndices([])}
         onOpenPrintDialog={() => setIsPrintDialogOpen(true)}
+      />
+
+      {/* Save As BarTender Modal */}
+      <SaveAsModal
+        isOpen={isSaveAsModalOpen}
+        initialName={currentTemplate.name}
+        onSave={(newName, desc) => handleSaveDocumentAs(activeDocumentInstanceId, newName, desc)}
+        onClose={() => setIsSaveAsModalOpen(false)}
+      />
+
+      {/* Unsaved Changes Confirmation Modal */}
+      <UnsavedChangesModal
+        isOpen={!!unsavedDocModal?.isOpen}
+        documentName={unsavedDocModal?.documentName || 'Document'}
+        onSave={async () => {
+          if (unsavedDocModal?.instanceId) {
+            await handleSaveDocument(unsavedDocModal.instanceId);
+            handlePerformCloseTab(unsavedDocModal.instanceId);
+          }
+          setUnsavedDocModal(null);
+        }}
+        onDontSave={() => {
+          if (unsavedDocModal?.instanceId) {
+            handlePerformCloseTab(unsavedDocModal.instanceId);
+          }
+          setUnsavedDocModal(null);
+        }}
+        onCancel={() => setUnsavedDocModal(null)}
+      />
+
+      {/* New Document Wizard Modal */}
+      <NewDocumentWizardModal
+        isOpen={isNewDocWizardOpen}
+        onClose={() => setIsNewDocWizardOpen(false)}
+        currentUser={currentUser.name}
+        onFinish={(newTpl) => {
+          const newDoc: OpenDocument = {
+            instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            documentId: newTpl.id,
+            type: 'template',
+            name: newTpl.name || 'Untitled Document',
+            isDirty: false,
+            isNew: false,
+            template: newTpl,
+            selectedElementIds: [],
+            history: { entries: [newTpl.elements || []], index: 0 },
+            viewState: { zoom: 1.25, panX: 40, panY: 40 },
+            dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+          };
+          setTemplates((prev) => [newTpl, ...prev]);
+          setOpenDocuments((prev) => [...prev, newDoc]);
+          setActiveDocumentInstanceId(newDoc.instanceId);
+          setCurrentTemplateId(newTpl.id);
+          setSelectedElementIds([]);
+          setHistory([newTpl.elements || []]);
+          setHistoryIndex(0);
+          setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
+          setIsNewDocWizardOpen(false);
+          showToast(`Created document "${newTpl.name}"`, 'success');
+        }}
+      />
+
+      {/* Printer & Hardware Setup Manager Modal */}
+      <PrinterManagerModal
+        isOpen={isPrinterManagerOpen}
+        onClose={() => setIsPrinterManagerOpen(false)}
+        onPrinterSelected={(p) => {
+          showToast(`Selected printer: ${p.name}`, 'info');
+        }}
       />
     </div>
   );

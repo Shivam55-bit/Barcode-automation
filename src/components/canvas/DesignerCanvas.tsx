@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { LabelTemplate, LabelElement, CanvasGuide, ViewportState } from '../../types';
+import { LabelTemplate, LabelElement, CanvasGuide, ViewportState, OpenDocument } from '../../types';
 import { HorizontalRuler, VerticalRuler } from './Rulers';
 import { CanvasElement } from './CanvasElement';
 import { ContextMenu } from './ContextMenu';
 import { RightVerticalToolbar } from './RightVerticalToolbar';
+import { DocumentTabBar } from './DocumentTabBar';
 import { Printer, Plus, ZoomIn, ZoomOut, Target, Maximize2 } from 'lucide-react';
 
 interface DesignerCanvasProps {
@@ -38,6 +39,19 @@ interface DesignerCanvasProps {
   setViewport: React.Dispatch<React.SetStateAction<ViewportState>>;
   recordData: Record<string, string>;
   onCursorMove?: (xMm: number, yMm: number) => void;
+  // Multi-Document Tabs
+  documents?: OpenDocument[];
+  activeInstanceId?: string | null;
+  onSelectTab?: (instanceId: string) => void;
+  onCloseTab?: (instanceId: string) => void;
+  onNewTemplate?: () => void;
+  onNewForm?: () => void;
+  onSaveDoc?: (instanceId: string) => void;
+  onSaveAll?: () => void;
+  onDuplicateDoc?: (instanceId: string) => void;
+  onCloseOthers?: (instanceId: string) => void;
+  onCloseAll?: () => void;
+  activePrinterName?: string;
 }
 
 export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
@@ -72,15 +86,24 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   setViewport,
   recordData,
   onCursorMove,
+  documents,
+  activeInstanceId,
+  onSelectTab,
+  onCloseTab,
+  onNewTemplate,
+  onNewForm,
+  onSaveDoc,
+  onSaveAll,
+  onDuplicateDoc,
+  onCloseOthers,
+  onCloseAll,
+  activePrinterName,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [cursorMm, setCursorMm] = useState({ x: 10.9, y: 22.1 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [isSpacePressed, setIsSpacePressed] = useState(false);
-
-  // Active Bottom Tab (Template 1, Template 2, Form 1, Form 2, Form 3)
-  const [activeBottomTab, setActiveBottomTab] = useState<'Template 1' | 'Template 2' | 'Form 1' | 'Form 2' | 'Form 3'>('Template 2');
 
   // Dragging elements state
   const [isDragging, setIsDragging] = useState(false);
@@ -791,40 +814,31 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         />
       </div>
 
-      {/* 4. Bottom Document / Form Tabs Bar (Template 1, Template 2, Form 1, Form 2, Form 3) */}
-      <div className="flex items-center h-6 bg-[#d8e2ee] px-1 border-t border-[#b8c5d6] text-xs overflow-x-auto no-scrollbar shrink-0 whitespace-nowrap">
-        <div className="flex items-center gap-0.5">
-          {(['Template 1', 'Template 2', 'Form 1', 'Form 2', 'Form 3'] as const).map((tab) => {
-            const isActive = activeBottomTab === tab;
-            return (
-              <button
-                key={tab}
-                onClick={() => setActiveBottomTab(tab)}
-                className={`px-3 py-0.5 text-[11px] font-medium rounded-t-xs border-t-2 transition-colors ${
-                  isActive
-                    ? 'bg-[#fff8db] border-t-amber-500 border-x border-[#b8c5d6] text-slate-900 shadow-xs'
-                    : 'bg-[#e4ebf5] border-t-transparent hover:bg-[#d0deec] text-slate-700'
-                }`}
-              >
-                {tab}
-              </button>
-            );
-          })}
-          <button
-            title="Add Template / Data Form"
-            className="p-1 hover:bg-[#c6d4e4] rounded text-slate-600 hover:text-slate-900"
-          >
-            <Plus className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
+      {/* 4. Bottom Document / Form Tabs Bar */}
+      {documents && documents.length > 0 && (
+        <DocumentTabBar
+          documents={documents}
+          activeInstanceId={activeInstanceId || null}
+          onSelectTab={onSelectTab || (() => {})}
+          onCloseTab={onCloseTab || (() => {})}
+          onNewTemplate={onNewTemplate || (() => {})}
+          onNewForm={onNewForm || (() => {})}
+          onSaveDoc={onSaveDoc}
+          onSaveAll={onSaveAll}
+          onDuplicateDoc={onDuplicateDoc}
+          onCloseOthers={onCloseOthers}
+          onCloseAll={onCloseAll}
+        />
+      )}
 
       {/* 5. Bottom Status Bar (Matching BarTender Status Bar) */}
       <div className="h-5 bg-[#e4ebf5] border-t border-[#cbd5e1] flex items-center justify-between px-2 text-[10.5px] sm:text-[11px] text-slate-700 select-none overflow-x-auto no-scrollbar shrink-0 whitespace-nowrap">
         {/* Segment 1: Printer */}
         <div className="flex items-center gap-1.5 border-r border-[#cbd5e1] pr-3 shrink-0">
           <Printer className="w-3 h-3 text-slate-600 shrink-0" />
-          <span className="truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">Printer: Microsoft Print to PDF</span>
+          <span className="truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">
+            Printer: {activePrinterName || 'Microsoft Print to PDF'}
+          </span>
         </div>
 
         {/* Segment 2: Object identification */}
