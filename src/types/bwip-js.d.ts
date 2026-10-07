@@ -22,11 +22,13 @@ declare module 'bwip-js' {
 
   export function toCanvas(canvas: HTMLCanvasElement | string, opts: ToCanvasOptions): HTMLCanvasElement;
   export function toSVG(opts: ToSVGOptions): string;
+  export function raw(opts: ToCanvasOptions): Array<{ pixx?: number; pixy?: number; sbs?: number[] }>;
   export function toBuffer(opts: ToCanvasOptions, callback: (err: Error | null, png: Buffer) => void): void;
 
   const bwipjs: {
     toCanvas: typeof toCanvas;
     toSVG: typeof toSVG;
+    raw: typeof raw;
     toBuffer: typeof toBuffer;
   };
 

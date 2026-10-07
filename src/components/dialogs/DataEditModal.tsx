@@ -4,6 +4,7 @@ import { evaluateElementData } from '../../services/dataSourceEngine';
 import { getSymbologyMetadata } from '../../services/barcodeEngine';
 import { X } from 'lucide-react';
 import { SpecialCharacterModal } from './SpecialCharacterModal';
+import { insertAtSelection } from '../../services/controlCharacterService';
 
 interface DataEditModalProps {
   isOpen: boolean;
@@ -30,6 +31,7 @@ export const DataEditModal: React.FC<DataEditModalProps> = ({
   const [dataValue, setDataValue] = useState<string>('');
   const [isSpecialCharModalOpen, setIsSpecialCharModalOpen] = useState<boolean>(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const savedSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
   useEffect(() => {
     if (isOpen && element) {
@@ -47,23 +49,28 @@ export const DataEditModal: React.FC<DataEditModalProps> = ({
 
   if (!isOpen || !element) return null;
 
-  const handleInsertSymbol = (symbol: string) => {
+  const handleOpenSpecialCharacters = () => {
     const textarea = textareaRef.current;
-    if (textarea) {
-      const start = textarea.selectionStart ?? dataValue.length;
-      const end = textarea.selectionEnd ?? dataValue.length;
-      const nextVal = dataValue.substring(0, start) + symbol + dataValue.substring(end);
-      setDataValue(nextVal);
-      setTimeout(() => {
-        if (textareaRef.current) {
+    const start = textarea ? textarea.selectionStart : (savedSelectionRef.current.start ?? dataValue.length);
+    const end = textarea ? textarea.selectionEnd : (savedSelectionRef.current.end ?? dataValue.length);
+    savedSelectionRef.current = { start, end };
+    setIsSpecialCharModalOpen(true);
+  };
+
+  const handleInsertSymbol = (symbol: string) => {
+    const start = savedSelectionRef.current.start ?? dataValue.length;
+    const end = savedSelectionRef.current.end ?? dataValue.length;
+    const { value: nextVal, newCursor } = insertAtSelection(dataValue, symbol, start, end);
+    savedSelectionRef.current = { start: newCursor, end: newCursor };
+    setDataValue(nextVal);
+    setTimeout(() => {
+      if (textareaRef.current) {
+        try {
           textareaRef.current.focus();
-          const newPos = start + symbol.length;
-          textareaRef.current.setSelectionRange(newPos, newPos);
-        }
-      }, 0);
-    } else {
-      setDataValue((prev) => prev + symbol);
-    }
+          textareaRef.current.setSelectionRange(newCursor, newCursor);
+        } catch {}
+      }
+    }, 0);
   };
 
   const handleOk = () => {
@@ -203,7 +210,8 @@ export const DataEditModal: React.FC<DataEditModalProps> = ({
             <button
               type="button"
               title="Insert Symbols or Special Characters"
-              onClick={() => setIsSpecialCharModalOpen(true)}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleOpenSpecialCharacters}
               className="px-2 py-0.5 bg-[#f8fafc] hover:bg-[#e2e8f0] active:bg-[#cbd5e1] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-sm cursor-pointer shadow-2xs flex items-center gap-1"
             >
               <span>Ω</span>
@@ -215,7 +223,19 @@ export const DataEditModal: React.FC<DataEditModalProps> = ({
               ref={textareaRef}
               rows={4}
               value={dataValue}
-              onChange={(e) => setDataValue(e.target.value)}
+              onChange={(e) => {
+                setDataValue(e.target.value);
+                savedSelectionRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd };
+              }}
+              onSelect={(e) => {
+                savedSelectionRef.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd };
+              }}
+              onKeyUp={(e) => {
+                savedSelectionRef.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd };
+              }}
+              onMouseUp={(e) => {
+                savedSelectionRef.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd };
+              }}
               onKeyDown={handleKeyDown}
               autoFocus
               className="flex-1 bg-white border border-[#94a3b8] rounded-xs p-2 font-mono text-sm text-slate-900 focus:outline-[#0078d7] resize-none"
@@ -225,7 +245,8 @@ export const DataEditModal: React.FC<DataEditModalProps> = ({
               <button
                 type="button"
                 title="Insert Symbols or Special Characters"
-                onClick={() => setIsSpecialCharModalOpen(true)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleOpenSpecialCharacters}
                 className="w-9 h-8 bg-[#f8fafc] hover:bg-[#e2e8f0] active:bg-[#cbd5e1] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-base cursor-pointer shadow-2xs flex items-center justify-center"
               >
                 Ω

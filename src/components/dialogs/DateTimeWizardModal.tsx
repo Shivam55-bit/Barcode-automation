@@ -29,9 +29,9 @@ export const DateTimeWizardModal: React.FC<DateTimeWizardModalProps> = ({
 }) => {
   const [dateType, setDateType] = useState<'current' | 'expiry' | 'mfg' | 'custom'>(initialItem?.dateType ?? 'current');
   const [formatMask, setFormatMask] = useState<string>(initialItem?.dateFormat ?? 'YYYY-MM-DD');
-  const [offsetDays, setOffsetDays] = useState<number>(initialItem?.dateOffsetDays ?? 0);
-  const [offsetMonths, setOffsetMonths] = useState<number>(initialItem?.dateOffsetMonths ?? 0);
-  const [offsetYears, setOffsetYears] = useState<number>(initialItem?.dateOffsetYears ?? 0);
+  const [offsetDays, setOffsetDays] = useState<number>(Number(initialItem?.dateOffsetDays) || 0);
+  const [offsetMonths, setOffsetMonths] = useState<number>(Number(initialItem?.dateOffsetMonths) || 0);
+  const [offsetYears, setOffsetYears] = useState<number>(Number(initialItem?.dateOffsetYears) || 0);
 
   const computeDate = (): Date => {
     const d = new Date();

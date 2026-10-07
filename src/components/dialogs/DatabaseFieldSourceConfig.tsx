@@ -51,8 +51,8 @@ export const DatabaseFieldSourceConfig: React.FC<DatabaseFieldSourceConfigProps>
         sourceType: currentConnection.type === 'excel' ? 'excel' : currentConnection.type === 'csv' ? 'csv' : 'sql',
         sheetName: currentConnection.sheetName || 'Sheet1',
         availableSheets: currentConnection.sheetName ? [currentConnection.sheetName] : ['Sheet1'],
-        columns: currentConnection.fields || (currentConnection.records[0] ? Object.keys(currentConnection.records[0]) : []),
-        fields: currentConnection.fields || (currentConnection.records[0] ? Object.keys(currentConnection.records[0]) : []),
+        columns: currentConnection.fields || (currentConnection.records?.[0] ? Object.keys(currentConnection.records[0] || {}) : []),
+        fields: currentConnection.fields || (currentConnection.records?.[0] ? Object.keys(currentConnection.records[0] || {}) : []),
         records: currentConnection.records,
         recordCount: currentConnection.records.length,
       };
@@ -102,7 +102,7 @@ export const DatabaseFieldSourceConfig: React.FC<DatabaseFieldSourceConfigProps>
   const currentSheet = dataSource.sheetName || activeDataset?.sheetName || availableSheets[0] || 'Sheet1';
 
   // Detected column fields from dataset schema and current record (Source of truth)
-  const availableColumns = useMemo<string[]>(() => {
+  const availableColumns = useMemo(() => {
     const set = new Set<string>();
     if (activeDataset) {
       if (Array.isArray(activeDataset.columns)) {
@@ -124,7 +124,7 @@ export const DatabaseFieldSourceConfig: React.FC<DatabaseFieldSourceConfigProps>
       }
     }
     if (currentRecord) {
-      Object.keys(currentRecord).forEach((k) => set.add(k));
+      Object.keys(currentRecord || {}).forEach((k) => set.add(k));
     }
     return Array.from(set).filter(Boolean);
   }, [activeDataset, currentConnection, currentRecord]);
@@ -148,7 +148,7 @@ export const DatabaseFieldSourceConfig: React.FC<DatabaseFieldSourceConfigProps>
     }
     // Case-insensitive lookup in currentRecord
     if (currentRecord) {
-      const match = Object.keys(currentRecord).find((k) => k.toLowerCase() === activeField.toLowerCase());
+      const match = Object.keys(currentRecord || {}).find((k) => k.toLowerCase() === activeField.toLowerCase());
       if (match && currentRecord[match] !== undefined) return String(currentRecord[match]);
     }
     if (activeDataset?.records && activeDataset.records.length > 0) {

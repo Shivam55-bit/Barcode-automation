@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
+import { getDataDirectory } from '../runtimePaths';
 
 /**
  * Service to ensure valid physical Windows Executable (.exe) installers exist
@@ -11,7 +12,9 @@ export class InstallerService {
   private downloadsDir: string;
 
   private constructor() {
-    this.downloadsDir = path.resolve(process.cwd(), 'barcode-automation-backend/downloads');
+    this.downloadsDir = process.env.BARCODEFLOW_DATA_DIR
+      ? path.join(getDataDirectory(), 'downloads')
+      : path.resolve(process.cwd(), 'barcode-automation-backend/downloads');
     this.ensureInstallerBinaries();
   }
 
@@ -30,6 +33,7 @@ export class InstallerService {
    * Generates or locates the physical genuine .exe installer file for the requested version.
    */
   public ensureInstallerBinaries(): void {
+    if (process.env.BARCODEFLOW_DESKTOP === '1') return;
     try {
       if (!fs.existsSync(this.downloadsDir)) {
         fs.mkdirSync(this.downloadsDir, { recursive: true });

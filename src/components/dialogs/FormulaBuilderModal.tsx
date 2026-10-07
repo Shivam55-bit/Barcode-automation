@@ -119,7 +119,9 @@ export const FormulaBuilderModal: React.FC<FormulaBuilderModalProps> = ({
     });
 
     setTestResult(res);
-  }, [expression, sampleRecord, namedDataSources, variables]);
+    // Serialize object/array props so this effect only re-runs when their
+    // content changes, not on every render (prevents infinite update loop).
+  }, [expression, JSON.stringify(sampleRecord), JSON.stringify(namedDataSources), JSON.stringify(variables)]);
 
   if (!isOpen) return null;
 

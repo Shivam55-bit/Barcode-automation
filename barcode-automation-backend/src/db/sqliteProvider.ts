@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { IDatabaseProvider } from './interfaces';
 import { runMigrations } from './migrations';
+import { getDataDirectory } from '../runtimePaths';
 
 let DatabaseSyncClass: any = null;
 try {
@@ -20,7 +21,7 @@ export class SqliteDatabaseProvider implements IDatabaseProvider {
   private dataDir: string;
 
   constructor(customPath?: string) {
-    this.dataDir = path.resolve(process.cwd(), 'barcode-automation-backend/data');
+    this.dataDir = getDataDirectory();
     if (!fs.existsSync(this.dataDir)) {
       fs.mkdirSync(this.dataDir, { recursive: true });
     }

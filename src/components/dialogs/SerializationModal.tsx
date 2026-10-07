@@ -419,12 +419,12 @@ export const SerializationModal: React.FC<SerializationModalProps> = ({
           ds.fields.forEach((f: any) => fields.add(typeof f === 'string' ? f : f.name));
         }
         if (ds.records && ds.records[0]) {
-          Object.keys(ds.records[0]).forEach((k) => fields.add(k));
+          Object.keys(ds.records[0] || {}).forEach((k) => fields.add(k));
         }
       });
     }
     if (currentRecord) {
-      Object.keys(currentRecord).forEach((k) => fields.add(k));
+      Object.keys(currentRecord || {}).forEach((k) => fields.add(k));
     }
     if (fields.size === 0) {
       return ['Quantity', 'SerialStep', 'BatchSize', 'CopiesCount', 'LotNumber', 'OrderQty'];

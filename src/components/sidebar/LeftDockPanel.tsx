@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import { LabelTemplate, LabelElement, VariableDefinition, BarcodeSymbology } from '../../types';
 import { DataSourcesPanel, DatabaseFieldBindingPayload } from './DataSourcesPanel';
+import { measureTextObject } from '../../services/textMeasurementEngine';
 
 interface LeftDockPanelProps {
   template: LabelTemplate;
@@ -234,10 +235,20 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
                     color: '#000000',
                     lineHeight: 1.2,
                     letterSpacing: 0,
-                    width: 40,
-                    height: 8,
+                    width: 25,
+                    height: 5,
+                    autoSize: true,
                   }}
-                  onClick={() =>
+                  onClick={() => {
+                    const dims = measureTextObject({
+                      text: 'Sample Text',
+                      fontFamily: 'Helvetica',
+                      fontSize: 10,
+                      fontWeight: 'normal',
+                      fontStyle: 'normal',
+                      letterSpacing: 0,
+                      lineHeight: 1.2,
+                    });
                     onInsertElement({
                       type: 'text',
                       name: 'Text Field',
@@ -252,10 +263,11 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
                       color: '#000000',
                       lineHeight: 1.2,
                       letterSpacing: 0,
-                      width: 40,
-                      height: 8,
-                    })
-                  }
+                      width: dims.width,
+                      height: dims.height,
+                      autoSize: true,
+                    });
+                  }}
                 />
                 <LibraryItem
                   icon={<Barcode className="w-4 h-4 text-emerald-600" />}
@@ -715,7 +727,7 @@ export const LeftDockPanel: React.FC<LeftDockPanelProps> = ({
               const cols = conn?.fields && conn.fields.length > 0
                 ? conn.fields
                 : template.sampleRecords && template.sampleRecords[0]
-                ? Object.keys(template.sampleRecords[0])
+                ? Object.keys(template.sampleRecords[0] || {})
                 : [];
               if (cols.length === 0) return null;
 

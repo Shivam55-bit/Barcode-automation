@@ -1,59 +1,170 @@
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, screen } from 'electron';
 import path from 'path';
 import fs from 'fs';
-import { fork, ChildProcess } from 'child_process';
+import type { Server } from 'http';
 import { registerPrinterIpc } from './printer/printerIPC';
 import { registerDatabaseIpc } from './database/databaseIPC';
 import { parseBarTenderDocument } from '../src/services/barTenderParser';
+import { openBarTenderWithConsent } from './bartenderImport';
+import { getDesktopDataDirectory } from '../barcode-automation-backend/src/runtimePaths';
 
 let mainWindow: BrowserWindow | null = null;
-let serverProcess: ChildProcess | null = null;
+let splashWindow: BrowserWindow | null = null;
+let backendServer: Server | null = null;
+let backendUrl = '';
+let accountSetupBackend: Pick<typeof import('../server'), 'getLegacyPasswordAccounts' | 'initializeLegacyPassword'> | null = null;
+let rendererReady = false;
+let resolveRendererReady: (() => void) | null = null;
+let rejectRendererReady: ((error: Error) => void) | null = null;
+let rendererReadyTimeout: NodeJS.Timeout | null = null;
+let isQuitting = false;
+let hasDirtyDocuments = false;
+let closeRequestPending = false;
+let recoverySnapshotPath = '';
+let shutdownMarkerPath = '';
+let allowRecoveryPrompt = false;
+const pendingDocumentPaths: string[] = [];
+const startupStartedAt = Date.now();
+let windowSettingsTimer: NodeJS.Timeout | null = null;
 
-const PORT = process.env.PORT || 3001;
 const isDev = process.env.NODE_ENV === 'development';
 
-function startBackendServer() {
-  const serverCjs = path.join(__dirname, '../dist/server.cjs');
-  const serverJs = path.join(__dirname, '../dist/server.js');
-  const serverPath = isDev
-    ? path.join(__dirname, '../server.ts')
-    : (fs.existsSync(serverCjs) ? serverCjs : (fs.existsSync(serverJs) ? serverJs : null));
+if (process.env.BARCODEFLOW_USER_DATA_DIR) {
+  fs.mkdirSync(process.env.BARCODEFLOW_USER_DATA_DIR, { recursive: true });
+  app.setPath('userData', path.resolve(process.env.BARCODEFLOW_USER_DATA_DIR));
+}
 
-  // 1. In production / packaged desktop app, run embedded in-process so client PC requires NO installed Node.js runtime!
-  if (serverPath && !isDev) {
-    try {
-      console.log(`[Electron Main] Initializing embedded in-process backend server from ${serverPath}...`);
-      require(serverPath);
-      console.log(`[Electron Main] In-process backend server successfully running on port ${PORT}`);
-      return;
-    } catch (inProcessErr: any) {
-      if (inProcessErr.code === 'EADDRINUSE') {
-        console.log(`[Electron Main] Port ${PORT} already active, reusing existing backend instance.`);
-        return;
-      }
-      console.warn(`[Electron Main] In-process server bootstrap notice:`, inProcessErr.message);
-    }
+app.setAppUserModelId('com.barcodeflow.enterprise');
+
+function writeStartupLog(message: string, error?: unknown): void {
+  const detail = error instanceof Error ? error.stack || error.message : error ? String(error) : '';
+  const line = `[${new Date().toISOString()}] ${message}${detail ? `\n${detail}` : ''}\n`;
+  try {
+    const logPath = path.join(app.getPath('logs'), 'barcodeflow-startup.log');
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.appendFileSync(logPath, line, 'utf8');
+  } catch (logError) {
+    console.error('[Desktop] Could not write startup log:', logError);
   }
+  console.log(line.trimEnd());
+}
 
-  // 2. Child process fork fallback
-  if (serverPath && fs.existsSync(serverPath)) {
-    try {
-      serverProcess = fork(serverPath, [], {
-        env: { ...process.env, PORT: String(PORT), NODE_ENV: isDev ? 'development' : 'production' },
-        silent: true,
-      });
-
-      serverProcess.on('error', (err) => {
-        console.log('[Electron Main] Backend process notice (server may already be running):', err.message);
-      });
-
-      console.log(`[Electron Main] Backend process configured on port ${PORT}`);
-    } catch (err) {
-      console.error('[Electron Main] Failed to spawn backend server process:', err);
-    }
-  } else {
-    console.log(`[Electron Main] Server file not found at ${serverPath}, assuming external server is running on port ${PORT}.`);
+function queueDocumentPath(candidate: string, cwd = process.cwd()): void {
+  if (!candidate || candidate.startsWith('-')) return;
+  const ext = path.extname(candidate).toLowerCase();
+  if (!['.bfl', '.json', '.btw'].includes(ext)) return;
+  const documentPath = path.resolve(cwd, candidate);
+  if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('document:open-request', documentPath);
+    return;
   }
+  if (!pendingDocumentPaths.includes(documentPath)) pendingDocumentPaths.push(documentPath);
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createSplashWindow(): Promise<void> {
+  const version = app.getVersion();
+  const markup = `<!doctype html><html><head><meta charset="utf-8"><style>
+    *{box-sizing:border-box}body{margin:0;width:100vw;height:100vh;display:grid;place-items:center;background:#f2f6f8;color:#19333a;font-family:Segoe UI,Arial,sans-serif}
+    main{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#f8fbfc,#e2eef0);border:1px solid #b4c9cb}
+    .mark{height:46px;display:flex;align-items:stretch;gap:4px;margin-bottom:18px}.mark i{display:block;width:5px;background:#087e83}.mark i:nth-child(2n){width:3px}.mark i:nth-child(3n){background:#d18b2c}
+    h1{font-size:23px;line-height:1.2;margin:0;font-weight:650}.version{font-size:11px;color:#526c70;margin-top:5px}.status{font-size:12px;color:#365a5d;margin-top:23px}
+    .spinner{width:16px;height:16px;border:2px solid #c8dadd;border-top-color:#087e83;border-radius:50%;animation:spin .8s linear infinite;margin-top:11px}@keyframes spin{to{transform:rotate(360deg)}}
+  </style></head><body><main><div class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><h1>BarcodeFlow</h1><div class="version">Enterprise Suite ${version}</div><div id="status" class="status">Starting desktop services...</div><div class="spinner" aria-label="Loading"></div></main></body></html>`;
+  splashWindow = new BrowserWindow({
+    width: 460,
+    height: 280,
+    frame: false,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    center: true,
+    show: false,
+    backgroundColor: '#f2f6f8',
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  splashWindow.once('ready-to-show', () => splashWindow?.show());
+  return splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(markup)}`).then(() => undefined);
+}
+
+function setSplashStatus(status: string): void {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+  const safeStatus = JSON.stringify(status);
+  void splashWindow.webContents.executeJavaScript(`document.getElementById('status').textContent=${safeStatus}`).catch(() => undefined);
+}
+
+function closeSplashWindow(): void {
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+  splashWindow = null;
+}
+
+function writeJsonAtomically(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try { fs.rmSync(tempPath, { force: true }); } catch { }
+    throw error;
+  }
+}
+
+function readPersistedSettings(): Record<string, any> {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'app-settings.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function persistWindowState(immediate = false): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (windowSettingsTimer) clearTimeout(windowSettingsTimer);
+  const persist = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
+    const settings = readPersistedSettings();
+    try {
+      writeJsonAtomically(path.join(app.getPath('userData'), 'app-settings.json'), {
+        ...settings,
+        windowBounds: mainWindow.isMaximized() ? settings.windowBounds || mainWindow.getBounds() : mainWindow.getBounds(),
+        windowMaximized: mainWindow.isMaximized(),
+      });
+    } catch (error) {
+      writeStartupLog('Could not persist window bounds.', error);
+    }
+  };
+  if (immediate) persist();
+  else windowSettingsTimer = setTimeout(persist, 250);
+}
+
+async function startBackendServer() {
+  if (!backendServer?.listening || !backendUrl) {
+    const serverCjs = path.join(__dirname, '../dist/server.cjs');
+    if (!fs.existsSync(serverCjs)) throw new Error('Bundled backend is missing. Rebuild or reinstall the application.');
+    process.env.PORT = '0';
+    process.env.NODE_ENV = 'production';
+    process.env.BARCODEFLOW_DESKTOP = '1';
+    process.env.BARCODEFLOW_DATA_DIR = getDesktopDataDirectory(app.getPath('userData'), path.join(__dirname, '..'), app.isPackaged);
+    process.env.BARCODEFLOW_DIST_DIR = path.join(__dirname, '../dist');
+    const resolvedBackend = require.resolve(serverCjs);
+    delete require.cache[resolvedBackend];
+    const backend = require(resolvedBackend);
+    backendServer = await backend.serverReady;
+    accountSetupBackend = backend;
+    const address = backendServer?.address();
+    if (!address || typeof address === 'string') throw new Error('Private backend did not become ready.');
+    backendUrl = `http://127.0.0.1:${address.port}`;
+  }
+  const response = await fetch(`${backendUrl}/api/health`, { signal: AbortSignal.timeout(5000) });
+  const health = await response.json() as { status?: string };
+  if (!response.ok || health.status !== 'online') throw new Error('The embedded BarcodeFlow service failed its health check.');
 }
 
 import * as XLSX from 'xlsx';
@@ -823,11 +934,11 @@ function registerExcelIpc() {
   ipcMain.handle('barcodeFlow:excel:get-sheets', async (_event, payload: { filePath: string; projectDir?: string }) => {
     const res = await inspectWorkbookInternal(payload.filePath, payload.projectDir);
     if (!res.success) return res;
-    return {
-      success: true,
-      sheets: res.metadata.sheets,
-      sheetNames: res.metadata.sheetNames,
-    };
+    const metadata = res.metadata;
+    if (!metadata) {
+      return { success: false, errorCode: 'EXCEL_INVALID_WORKBOOK', error: 'Workbook metadata is unavailable.' };
+    }
+    return { success: true, sheets: metadata.sheets, sheetNames: metadata.sheetNames };
   });
 
   // 5. Get Fields
@@ -937,6 +1048,9 @@ function registerExcelIpc() {
     const res = await inspectWorkbookInternal(filePath);
     if (!res.success) return res;
     const meta = res.metadata;
+    if (!meta) {
+      return { success: false, errorCode: 'EXCEL_INVALID_WORKBOOK', error: 'Workbook metadata is unavailable.' };
+    }
     return {
       success: true,
       filePath: meta.fullPath,
@@ -962,13 +1076,14 @@ function registerExcelIpc() {
         pageSize: 100000,
       });
       if (!res.success) return res;
+      const rows = res.rows || [];
       return {
         success: true,
         sheetNames: [sheetName || 'Sheet1'],
         selectedSheet: sheetName,
         columns: res.columns,
-        records: res.rows,
-        previewRows: res.rows.slice(0, 20),
+        records: rows,
+        previewRows: rows.slice(0, 20),
         totalRecords: res.totalRows,
       };
     }
@@ -1013,11 +1128,64 @@ function registerExcelIpc() {
 
 
 function registerDocumentIpc() {
+  ipcMain.handle('app:renderer-ready', event => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return [];
+    rendererReady = true;
+    if (rendererReadyTimeout) clearTimeout(rendererReadyTimeout);
+    rendererReadyTimeout = null;
+    resolveRendererReady?.();
+    resolveRendererReady = null;
+    rejectRendererReady = null;
+    const queued = pendingDocumentPaths.splice(0, pendingDocumentPaths.length);
+    return queued;
+  });
+
+  const isMainRenderer = (event: Electron.IpcMainInvokeEvent) =>
+    !!mainWindow && event.sender === mainWindow.webContents && event.senderFrame === mainWindow.webContents.mainFrame;
+
+  ipcMain.handle('document:recovery-read', event => {
+    if (!isMainRenderer(event) || !allowRecoveryPrompt) return null;
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(recoverySnapshotPath, 'utf8'));
+      if (snapshot?.version !== 1 || !Array.isArray(snapshot.documents) || snapshot.documents.length === 0) return null;
+      return snapshot;
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('document:recovery-write', (event, snapshot: any) => {
+    if (!isMainRenderer(event) || isQuitting || snapshot?.version !== 1 || !Array.isArray(snapshot.documents)) return false;
+    if (snapshot.documents.length === 0 || snapshot.documents.length > 20) return false;
+    try {
+      const serialized = JSON.stringify(snapshot);
+      if (Buffer.byteLength(serialized, 'utf8') > 100 * 1024 * 1024) {
+        throw new Error('Recovery snapshot exceeds the 100 MiB safety limit.');
+      }
+      writeJsonAtomically(recoverySnapshotPath, snapshot);
+      return true;
+    } catch (error) {
+      writeStartupLog('Could not save the latest recovery snapshot.', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('document:recovery-clear', event => {
+    if (!isMainRenderer(event)) return false;
+    try {
+      fs.rmSync(recoverySnapshotPath, { force: true });
+      return true;
+    } catch (error) {
+      writeStartupLog('Could not clear the resolved recovery snapshot.', error);
+      return false;
+    }
+  });
+
   // 1. Show Native Windows Save As Dialog
   ipcMain.handle('document:show-save-dialog', async (_event, defaultFileName?: string, defaultDir?: string) => {
     if (!mainWindow) return { canceled: true };
     const defaultName = (defaultFileName || 'Document1').replace(/[\/\\:*?"<>|]/g, '_');
-    const safeName = defaultName.endsWith('.bfl') || defaultName.endsWith('.btw') ? defaultName : `${defaultName}.bfl`;
+    const safeName = /\.(bfl|json)$/i.test(defaultName) ? defaultName : `${defaultName.replace(/\.btw$/i, '')}.bfl`;
     const defaultPath = defaultDir && fs.existsSync(defaultDir)
       ? path.join(defaultDir, safeName)
       : path.join(app.getPath('documents'), safeName);
@@ -1027,7 +1195,6 @@ function registerDocumentIpc() {
       defaultPath,
       filters: [
         { name: 'BarcodeFlow Document (*.bfl)', extensions: ['bfl'] },
-        { name: 'BarTender Document (*.btw)', extensions: ['btw'] },
         { name: 'JSON Document (*.json)', extensions: ['json'] },
         { name: 'All Files (*.*)', extensions: ['*'] }
       ]
@@ -1049,6 +1216,9 @@ function registerDocumentIpc() {
   ipcMain.handle('document:save-file', async (_event, { filePath, documentData }: { filePath: string; documentData: any }) => {
     if (!filePath) {
       return { success: false, error: 'File path cannot be empty' };
+    }
+    if (/\.btw[. ]*$/i.test(filePath)) {
+      return { success: false, error: 'Native BarcodeFlow JSON cannot overwrite a BarTender .btw file. Save as .bfl instead.' };
     }
     const resolvedPath = path.normalize(path.resolve(filePath));
     const targetDir = path.dirname(resolvedPath);
@@ -1219,18 +1389,39 @@ function registerDocumentIpc() {
 
       // Case 1: BarTender .btw file (Binary / Compound OLE)
       if (ext === '.btw') {
-        console.log(`[DocumentService] Detected BarTender .btw document: ${resolvedPath} (${stats.size} bytes). Parsing template layout.`);
-        const buf = await fs.promises.readFile(resolvedPath);
-        const parsedDoc = parseBarTenderDocument(buf, path.basename(resolvedPath));
+        const result = await openBarTenderWithConsent({
+          sourcePath: resolvedPath,
+          workingRoot: path.join(app.getPath('temp'), 'BarcodeFlow', 'bartender-import'),
+          scriptPath: app.isPackaged
+            ? path.join(process.resourcesPath, 'interop', 'bartender_snapshot.ps1')
+            : path.join(__dirname, '../scripts/bartender_snapshot.ps1'),
+          onProgress: phase => {
+            if (!_event.sender.isDestroyed()) _event.sender.send('document:bartender-progress', { filePath: resolvedPath, phase });
+          },
+          confirm: async () => {
+            const owner = BrowserWindow.fromWebContents(_event.sender);
+            if (!owner) return false;
+            const consent = await dialog.showMessageBox(owner, {
+              type: 'warning', title: 'BarTender-assisted Partial Import',
+              message: `Extract verified objects from ${path.basename(resolvedPath)}?`,
+              detail: 'Requires installed, licensed BarTender Automation/Enterprise Automation with ActiveX support on Windows.\n\nOnly verified properties will become an unsaved native draft; unresolved text, barcodes and behaviors remain listed in a partial report. This is not a complete or production-ready label.\n\nA private temporary copy is opened in a separate automation instance. No print, source-save or evaluated Value calls are issued. BarTender may execute document-open scripts or access external dependencies: use only a trusted working copy safe for non-production inspection.',
+              buttons: ['Extract Partial Draft', 'Cancel'], defaultId: 1, cancelId: 1,
+              checkboxLabel: 'This is a trusted working copy safe for non-production inspection.', checkboxChecked: false,
+              noLink: true,
+            });
+            return consent.response === 0 && consent.checkboxChecked;
+          },
+        });
+        if (!result.success) return result;
         return {
           success: true,
-          format: 'BARTENDER_BTW',
-          document: parsedDoc,
+          format: 'JSON',
+          document: result.document,
           filePath: resolvedPath,
           fileName: path.basename(resolvedPath),
           sizeBytes: stats.size,
           lastModified: stats.mtime.toISOString(),
-          isBinary: true,
+          isBinary: false,
         };
       }
 
@@ -1264,7 +1455,7 @@ function registerDocumentIpc() {
 
       // Read buffer header to detect BarTender text signature
       const headerStr = headerBuf.toString('latin1');
-      if (headerStr.includes('Bar Tender') || headerStr.includes('BarTender') || headerStr.includes('Seagull')) {
+      if (/^\s*Bar Tender Format File(?:\s|$)/.test(headerStr)) {
         console.log(`[DocumentService] Detected BarTender signature in: ${resolvedPath}. Parsing template layout.`);
         const buf = await fs.promises.readFile(resolvedPath);
         const parsedDoc = parseBarTenderDocument(buf, path.basename(resolvedPath));
@@ -1283,7 +1474,7 @@ function registerDocumentIpc() {
       // Case 2: BarcodeFlow Native (.bfl) or JSON
       const content = await fs.promises.readFile(resolvedPath, 'utf-8');
       try {
-        const parsed = JSON.parse(content);
+        const parsed = JSON.parse(content.replace(/^\uFEFF/, ''));
         return {
           success: true,
           format: ext === '.bfl' || parsed.format === 'BarcodeFlowDocument' ? 'BARCODEFLOW_NATIVE' : 'JSON',
@@ -1366,21 +1557,268 @@ function registerDocumentIpc() {
     }
   });
 
-  // 7. Native App Exit
+  // 6c. Recent Documents MRU Persistence & App Settings in Electron UserData
+  function getRecentDocumentsPath(): string {
+    const userData = app.getPath('userData');
+    if (!fs.existsSync(userData)) {
+      fs.mkdirSync(userData, { recursive: true });
+    }
+    return path.join(userData, 'recent-documents.json');
+  }
+
+  function getAppSettingsPath(): string {
+    const userData = app.getPath('userData');
+    if (!fs.existsSync(userData)) {
+      fs.mkdirSync(userData, { recursive: true });
+    }
+    return path.join(userData, 'app-settings.json');
+  }
+
+  function readRecentDocumentsFromDisk(): any[] {
+    try {
+      const p = getRecentDocumentsPath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (err) {
+      console.warn('[RecentDocuments] Failed to read recent documents from disk:', err);
+    }
+    return [];
+  }
+
+  function writeRecentDocumentsToDisk(items: any[]): void {
+    try {
+      const p = getRecentDocumentsPath();
+      writeJsonAtomically(p, items);
+    } catch (err) {
+      console.warn('[RecentDocuments] Failed to write recent documents to disk:', err);
+    }
+  }
+
+  function readAppSettingsFromDisk(): Record<string, any> {
+    try {
+      const p = getAppSettingsPath();
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch (err) {
+      console.warn('[AppSettings] Failed to read settings from disk:', err);
+    }
+    return { showWelcomeOnStartup: true };
+  }
+
+  function writeAppSettingsToDisk(settings: Record<string, any>): void {
+    try {
+      const p = getAppSettingsPath();
+      writeJsonAtomically(p, settings);
+    } catch (err) {
+      console.warn('[AppSettings] Failed to write settings to disk:', err);
+    }
+  }
+
+  ipcMain.handle('document:get-recent', async () => {
+    return readRecentDocumentsFromDisk();
+  });
+
+  ipcMain.handle('document:add-recent', async (_event, filePathOrEntry: any, maybeName?: string) => {
+    if (!filePathOrEntry) return readRecentDocumentsFromDisk();
+
+    const rawPath = typeof filePathOrEntry === 'string' ? filePathOrEntry : filePathOrEntry.filePath || filePathOrEntry.absolutePath;
+    if (!rawPath || typeof rawPath !== 'string') return readRecentDocumentsFromDisk();
+
+    const resolvedPath = path.normalize(path.resolve(rawPath.trim()));
+    const ext = path.extname(resolvedPath).toLowerCase();
+    const ALLOWED_EXTS = ['.bfl', '.btw', '.json'];
+    if (!ALLOWED_EXTS.includes(ext)) {
+      console.warn(`[RecentDocuments] Ignored unsupported file format: ${ext}`);
+      return readRecentDocumentsFromDisk();
+    }
+
+    let stats: fs.Stats | null = null;
+    try {
+      if (fs.existsSync(resolvedPath)) {
+        stats = fs.statSync(resolvedPath);
+      }
+    } catch { }
+
+    const displayName = maybeName || (typeof filePathOrEntry === 'object' && filePathOrEntry.displayName) || (typeof filePathOrEntry === 'object' && filePathOrEntry.fileName) || path.basename(resolvedPath);
+    const templateName = (typeof filePathOrEntry === 'object' && filePathOrEntry.templateName) || displayName;
+
+    const entry = {
+      id: (typeof filePathOrEntry === 'object' && filePathOrEntry.id) || `mru-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      absolutePath: resolvedPath,
+      displayName,
+      filePath: resolvedPath,
+      fileName: displayName,
+      lastOpenedAt: new Date().toISOString(),
+      lastModified: stats ? stats.mtime.toISOString() : undefined,
+      fileType: ext.replace('.', '') || 'bfl',
+      fileSize: stats ? stats.size : undefined,
+      templateName,
+    };
+
+    const current = readRecentDocumentsFromDisk();
+    const filtered = current.filter((item) => {
+      const itemPath = (item.absolutePath || item.filePath || '').toLowerCase();
+      return itemPath !== resolvedPath.toLowerCase();
+    });
+
+    const updated = [entry, ...filtered].slice(0, 10);
+    writeRecentDocumentsToDisk(updated);
+    return updated;
+  });
+
+  ipcMain.handle('document:remove-recent', async (_event, filePath: string) => {
+    if (!filePath || typeof filePath !== 'string') return readRecentDocumentsFromDisk();
+    const resolvedPath = path.normalize(path.resolve(filePath.trim()));
+    const current = readRecentDocumentsFromDisk();
+    const updated = current.filter((item) => {
+      const itemPath = (item.absolutePath || item.filePath || '').toLowerCase();
+      return itemPath !== resolvedPath.toLowerCase();
+    });
+    writeRecentDocumentsToDisk(updated);
+    return updated;
+  });
+
+  ipcMain.handle('document:clear-recent', async () => {
+    writeRecentDocumentsToDisk([]);
+    return [];
+  });
+
+  ipcMain.handle('app:get-settings', async () => {
+    return readAppSettingsFromDisk();
+  });
+
+  ipcMain.handle('app:save-settings', async (_event, newSettings: Record<string, any>) => {
+    const existing = readAppSettingsFromDisk();
+    const updated = { ...existing, ...newSettings };
+    writeAppSettingsToDisk(updated);
+    return updated;
+  });
+
+  // 7. Native App Exit & Window Controls
   ipcMain.handle('app:exit', async () => {
     app.quit();
     return true;
   });
+
+  ipcMain.on('app:set-document-dirty', (event, dirty: boolean) => {
+    if (event.sender === mainWindow?.webContents) hasDirtyDocuments = dirty === true;
+  });
+
+  ipcMain.handle('window:confirm-close', event => {
+    if (event.sender !== mainWindow?.webContents || !closeRequestPending) return false;
+    closeRequestPending = false;
+    app.quit();
+    return true;
+  });
+
+  ipcMain.handle('window:cancel-close', event => {
+    if (event.sender !== mainWindow?.webContents) return false;
+    closeRequestPending = false;
+    return true;
+  });
+
+  ipcMain.handle('window:minimize', async () => {
+    if (mainWindow) {
+      mainWindow.minimize();
+      return true;
+    }
+    return false;
+  });
+
+  ipcMain.handle('window:maximize', async () => {
+    if (mainWindow) {
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+      } else {
+        mainWindow.maximize();
+      }
+      return mainWindow.isMaximized();
+    }
+    return false;
+  });
+
+  ipcMain.handle('window:is-maximized', async () => {
+    return mainWindow ? mainWindow.isMaximized() : false;
+  });
+
+  ipcMain.handle('window:close', async () => {
+    if (mainWindow) {
+      mainWindow.close();
+      return true;
+    }
+    return false;
+  });
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+function registerAccountSetupIpc() {
+  let pending = false;
+  const isTrusted = (event: Electron.IpcMainInvokeEvent) => !!mainWindow &&
+    event.sender === mainWindow.webContents && event.senderFrame === mainWindow.webContents.mainFrame &&
+    !!event.senderFrame?.url.startsWith(`${backendUrl}/`);
+
+  ipcMain.handle('auth:list-initial-password-accounts', event => {
+    if (!isTrusted(event)) return [];
+    return accountSetupBackend?.getLegacyPasswordAccounts() || [];
+  });
+  ipcMain.handle('auth:initialize-legacy-password', async (event, payload: { email: string; password: string }) => {
+    if (!isTrusted(event) || !accountSetupBackend || pending) return { success: false, error: 'Password setup requires the local desktop window.' };
+    if (typeof payload?.email !== 'string' || typeof payload.password !== 'string' || payload.password.length < 12 || payload.password.length > 1024) {
+      return { success: false, error: 'Password must contain between 12 and 1024 characters.' };
+    }
+    const email = payload.email.trim().toLowerCase();
+    if (!accountSetupBackend.getLegacyPasswordAccounts().some(account => account.email.toLowerCase() === email)) {
+      return { success: false, error: 'This account is not eligible for initial password setup.' };
+    }
+    pending = true;
+    try {
+      const consent = await dialog.showMessageBox(mainWindow!, {
+        type: 'warning', buttons: ['Cancel', 'Set Password'], defaultId: 0, cancelId: 0,
+        title: 'Initial Account Password', message: `Set the initial password for ${email}?`,
+        detail: 'Approve only if you own this local account. This account has no saved password. Existing passwords, roles, approvals and permissions will not be changed.',
+        noLink: true,
+      });
+      if (consent.response !== 1) return { success: false, canceled: true };
+      if (!isTrusted(event)) return { success: false, error: 'Desktop window changed. Password was not saved.' };
+      accountSetupBackend.initializeLegacyPassword(email, payload.password);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Password could not be saved.' };
+    } finally {
+      pending = false;
+    }
+  });
+}
+
+async function createWindow(): Promise<void> {
+  rendererReady = false;
+  const settings = readPersistedSettings();
+  const saved = settings.windowBounds;
+  let windowBounds = { width: 1440, height: 900, x: undefined as number | undefined, y: undefined as number | undefined };
+  if (saved && [saved.x, saved.y, saved.width, saved.height].every(Number.isFinite)) {
+    const display = screen.getDisplayMatching(saved);
+    const area = display.workArea;
+    const width = Math.min(area.width, Math.max(1024, saved.width));
+    const height = Math.min(area.height, Math.max(700, saved.height));
+    const intersects = saved.x + saved.width > area.x && saved.x < area.x + area.width &&
+      saved.y + saved.height > area.y && saved.y < area.y + area.height;
+    windowBounds = {
+      width,
+      height,
+      x: intersects ? Math.max(area.x, Math.min(saved.x, area.x + area.width - width)) : undefined,
+      y: intersects ? Math.max(area.y, Math.min(saved.y, area.y + area.height - height)) : undefined,
+    };
+  }
+
+  const window = new BrowserWindow({
+    ...windowBounds,
     minWidth: 1024,
     minHeight: 700,
     title: 'BarcodeFlow Enterprise Suite',
-    icon: path.join(__dirname, '../assets/icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -1388,60 +1826,113 @@ function createWindow() {
       webSecurity: true,
     },
     autoHideMenuBar: true,
-    show: true,
+    show: false,
+    backgroundColor: '#0f172a',
   });
+  mainWindow = window;
 
-  const localServerUrl = `http://localhost:${PORT}`;
+  const localServerUrl = backendUrl;
   const distIndex = path.join(__dirname, '../dist/index.html');
-  console.log(`[Electron Main] Loading frontend. Local server: ${localServerUrl}, distIndex exists: ${fs.existsSync(distIndex)}`);
+  if (!fs.existsSync(distIndex)) throw new Error('The packaged BarcodeFlow designer bundle is missing.');
+  writeStartupLog(`Loading designer from ${localServerUrl}; startup elapsed ${Date.now() - startupStartedAt}ms.`);
 
-  // Load via local HTTP server for full localhost experience (matches browser exactly), fallback to loadFile
-  let loadAttempts = 0;
-  const loadApp = () => {
-    loadAttempts++;
-    mainWindow?.loadURL(localServerUrl).catch(() => {
-      if (loadAttempts < 4) {
-        setTimeout(loadApp, 350);
-      } else {
-        console.log('[Electron Main] Local server HTTP connection timed out, loading static dist/index.html...');
-        if (fs.existsSync(distIndex)) {
-          mainWindow?.loadFile(distIndex);
-        }
-      }
-    });
-  };
-
-  loadApp();
-
-  mainWindow.once('ready-to-show', () => {
-    console.log('[Electron Main] Window ready-to-show event fired');
-    mainWindow?.show();
-    mainWindow?.maximize();
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    writeStartupLog(`Failed to load ${validatedURL}: ${errorCode} - ${errorDescription}`);
   });
 
-  setTimeout(() => {
-    if (mainWindow && !mainWindow.isVisible()) {
-      console.log('[Electron Main] Fallback show timer triggered');
-      mainWindow.show();
-      mainWindow.maximize();
-    }
-  }, 2500);
-
-  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    console.error(`[Electron Main] Failed to load ${validatedURL}: ${errorCode} - ${errorDescription}`);
-    if (fs.existsSync(distIndex) && !validatedURL.includes('index.html')) {
-      mainWindow?.loadFile(distIndex);
-    }
+  window.on('resize', () => persistWindowState());
+  window.on('move', () => persistWindowState());
+  window.on('maximize', () => persistWindowState());
+  window.on('unmaximize', () => persistWindowState());
+  window.on('close', () => persistWindowState(true));
+  window.on('close', event => {
+    if (isQuitting || !hasDirtyDocuments) return;
+    event.preventDefault();
+    if (closeRequestPending) return;
+    closeRequestPending = true;
+    window.webContents.send('app:request-close');
   });
-
-  mainWindow.on('closed', () => {
+  window.on('closed', () => {
     mainWindow = null;
+    if (!rendererReady && rejectRendererReady) {
+      if (rendererReadyTimeout) clearTimeout(rendererReadyTimeout);
+      rendererReadyTimeout = null;
+      const reject = rejectRendererReady;
+      resolveRendererReady = null;
+      rejectRendererReady = null;
+      reject(new Error('The designer window closed before the renderer became ready.'));
+    }
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  await window.loadURL(localServerUrl);
+  if (window.isDestroyed()) throw new Error('The designer window closed before startup completed.');
+  if (!rendererReady) {
+    await new Promise<void>((resolve, reject) => {
+      resolveRendererReady = resolve;
+      rejectRendererReady = reject;
+      rendererReadyTimeout = setTimeout(() => {
+        rendererReadyTimeout = null;
+        resolveRendererReady = null;
+        rejectRendererReady = null;
+        reject(new Error('The BarcodeFlow designer did not become ready within 30 seconds.'));
+      }, 30000);
+    });
+  }
+  if (window.isDestroyed()) throw new Error('The designer window closed during startup.');
+  window.show();
+  if (settings.windowMaximized !== false) window.maximize();
+}
+
+async function runDesktopStartup(): Promise<void> {
+  let attempt = 0;
+  try {
+    await createSplashWindow();
+  } catch (error) {
+    writeStartupLog('Could not display the startup splash.', error);
+  }
+
+  while (!isQuitting) {
+    attempt += 1;
+    try {
+      setSplashStatus('Starting local services...');
+      await startBackendServer();
+      setSplashStatus('Loading the designer...');
+      await createWindow();
+      writeStartupLog(`Startup completed in ${Date.now() - startupStartedAt}ms after ${attempt} attempt(s).`);
+      closeSplashWindow();
+      return;
+    } catch (error: any) {
+      writeStartupLog(`Startup attempt ${attempt} failed.`, error);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+      mainWindow = null;
+
+      const options = {
+        type: 'error' as const,
+        title: 'BarcodeFlow could not start',
+        message: 'BarcodeFlow could not finish initializing.',
+        detail: `${error?.message || String(error)}\n\nStartup log: ${path.join(app.getPath('logs'), 'barcodeflow-startup.log')}`,
+        buttons: ['Retry', 'Open Logs', 'Exit'],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+      };
+      const result = splashWindow && !splashWindow.isDestroyed()
+        ? await dialog.showMessageBox(splashWindow, options)
+        : await dialog.showMessageBox(options);
+      if (result.response === 0) continue;
+      if (result.response === 1) {
+        await shell.openPath(path.join(app.getPath('logs'), 'barcodeflow-startup.log'));
+        continue;
+      }
+      app.quit();
+      return;
+    }
+  }
 }
 
 let cachedSystemFonts: string[] | null = null;
@@ -1560,28 +2051,92 @@ function registerFontIpc() {
   });
 }
 
-app.whenReady().then(() => {
-  registerDocumentIpc();
-  registerExcelIpc();
-  registerFontIpc();
-  registerPrinterIpc(() => mainWindow);
-  registerDatabaseIpc(() => mainWindow);
-  startBackendServer();
-  createWindow();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  process.argv.forEach(argument => queueDocumentPath(argument));
+
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    queueDocumentPath(filePath);
+    focusMainWindow();
+  });
+
+  app.on('second-instance', (_event, commandLine, cwd) => {
+    commandLine.forEach(argument => queueDocumentPath(argument, cwd));
+    if (mainWindow) focusMainWindow();
+    else if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.show();
+      splashWindow.focus();
     }
   });
-});
 
-app.on('window-all-closed', () => {
-  if (serverProcess) {
-    serverProcess.kill();
-  }
-  if (process.platform !== 'darwin') {
+  app.whenReady().then(async () => {
+    const userDataDirectory = app.getPath('userData');
+    fs.mkdirSync(userDataDirectory, { recursive: true });
+    recoverySnapshotPath = path.join(userDataDirectory, 'recovery-snapshot.json');
+    shutdownMarkerPath = path.join(userDataDirectory, 'session-in-progress');
+    allowRecoveryPrompt = fs.existsSync(shutdownMarkerPath);
+    if (!allowRecoveryPrompt) {
+      try {
+        fs.rmSync(recoverySnapshotPath, { force: true });
+      } catch (error) {
+        writeStartupLog('Could not clear a recovery snapshot left by a normal shutdown.', error);
+      }
+    }
+    fs.writeFileSync(shutdownMarkerPath, new Date().toISOString(), 'utf8');
+    registerAccountSetupIpc();
+    registerDocumentIpc();
+    registerExcelIpc();
+    registerFontIpc();
+    registerPrinterIpc(() => mainWindow);
+    registerDatabaseIpc(() => mainWindow);
+    writeStartupLog('Electron is ready; initializing local services.');
+    await runDesktopStartup();
+
+    app.on('activate', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) focusMainWindow();
+      else void runDesktopStartup();
+    });
+  }).catch(error => {
+    writeStartupLog('Desktop initialization failed before the retry flow became available.', error);
+    dialog.showErrorBox('BarcodeFlow startup failed', error.message || String(error));
     app.quit();
-  }
-});
+  });
 
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+
+  app.on('before-quit', event => {
+    if (isQuitting) return;
+    isQuitting = true;
+    for (const statePath of [recoverySnapshotPath, shutdownMarkerPath]) {
+      if (!statePath) continue;
+      try {
+        fs.rmSync(statePath, { force: true });
+      } catch (error) {
+        writeStartupLog(`Could not clear clean-shutdown recovery state at ${statePath}.`, error);
+      }
+    }
+    if (!backendServer?.listening) return;
+
+    event.preventDefault();
+    const server = backendServer;
+    const closeTimeout = setTimeout(() => {
+      server.closeAllConnections?.();
+      backendServer = null;
+      backendUrl = '';
+      app.quit();
+    }, 5000);
+    closeTimeout.unref();
+    server.close(() => {
+      clearTimeout(closeTimeout);
+      backendServer = null;
+      backendUrl = '';
+      app.quit();
+    });
+  });
+}

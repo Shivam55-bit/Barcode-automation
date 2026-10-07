@@ -3,6 +3,28 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   isElectron: true,
+  rendererReady: (): Promise<string[]> =>
+    ipcRenderer.invoke('app:renderer-ready'),
+  onOpenDocumentRequest: (callback: (filePath: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, filePath: string) => callback(filePath);
+    ipcRenderer.on('document:open-request', listener);
+    return () => ipcRenderer.removeListener('document:open-request', listener);
+  },
+  setDocumentDirty: (dirty: boolean): void => ipcRenderer.send('app:set-document-dirty', dirty),
+  readRecoverySnapshot: (): Promise<any | null> => ipcRenderer.invoke('document:recovery-read'),
+  writeRecoverySnapshot: (snapshot: any): Promise<boolean> => ipcRenderer.invoke('document:recovery-write', snapshot),
+  clearRecoverySnapshot: (): Promise<boolean> => ipcRenderer.invoke('document:recovery-clear'),
+  onCloseRequest: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:request-close', listener);
+    return () => ipcRenderer.removeListener('app:request-close', listener);
+  },
+  confirmCloseWindow: (): Promise<boolean> => ipcRenderer.invoke('window:confirm-close'),
+  cancelCloseRequest: (): Promise<boolean> => ipcRenderer.invoke('window:cancel-close'),
+  listInitialPasswordAccounts: (): Promise<Array<{ email: string; name: string }>> =>
+    ipcRenderer.invoke('auth:list-initial-password-accounts'),
+  initializeLegacyPassword: (payload: { email: string; password: string }): Promise<{ success: boolean; canceled?: boolean; error?: string }> =>
+    ipcRenderer.invoke('auth:initialize-legacy-password', payload),
   // Secure Linked Excel Desktop APIs
   selectExcelFile: (): Promise<{ canceled: boolean; filePath?: string; fileName?: string; sizeBytes?: number; lastModified?: string }> =>
     ipcRenderer.invoke('excel:select-file'),
@@ -40,18 +62,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('document:save-binary-file', { filePath, base64Data }),
   showOpenDialog: (defaultDir?: string): Promise<{ canceled: boolean; filePath?: string; fileName?: string }> =>
     ipcRenderer.invoke('document:show-open-dialog', defaultDir),
-  readFile: (filePath: string): Promise<{ success: boolean; document?: any; filePath?: string; fileName?: string; sizeBytes?: number; lastModified?: string; error?: string }> =>
+  readFile: (filePath: string): Promise<{ success: boolean; canceled?: boolean; document?: any; filePath?: string; fileName?: string; sizeBytes?: number; lastModified?: string; error?: string; errorCode?: string }> =>
     ipcRenderer.invoke('document:read-file', filePath),
+  onBarTenderImportProgress: (callback: (data: { filePath: string; phase: 'AWAITING_CONSENT' | 'EXTRACTING' | 'VERIFYING' }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { filePath: string; phase: 'AWAITING_CONSENT' | 'EXTRACTING' | 'VERIFYING' }) => callback(data);
+    ipcRenderer.on('document:bartender-progress', listener);
+    return () => ipcRenderer.removeListener('document:bartender-progress', listener);
+  },
   checkFileExists: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('document:check-file-exists', filePath),
   openDocumentLocation: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('document:open-location', filePath),
   openDocumentFile: (filePath: string): Promise<boolean> =>
     ipcRenderer.invoke('document:open-file', filePath),
+  getRecentDocuments: (): Promise<any[]> =>
+    ipcRenderer.invoke('document:get-recent'),
+  addRecentDocument: (filePathOrEntry: any, maybeName?: string): Promise<any[]> =>
+    ipcRenderer.invoke('document:add-recent', filePathOrEntry, maybeName),
+  removeRecentDocument: (filePath: string): Promise<any[]> =>
+    ipcRenderer.invoke('document:remove-recent', filePath),
+  clearRecentDocuments: (): Promise<any[]> =>
+    ipcRenderer.invoke('document:clear-recent'),
+  getAppSettings: (): Promise<Record<string, any>> =>
+    ipcRenderer.invoke('app:get-settings'),
+  saveAppSettings: (settings: Record<string, any>): Promise<Record<string, any>> =>
+    ipcRenderer.invoke('app:save-settings', settings),
   getFonts: (): Promise<string[]> =>
     ipcRenderer.invoke('fonts:list'),
   exitApp: (): Promise<boolean> =>
     ipcRenderer.invoke('app:exit'),
+  minimizeWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:minimize'),
+  maximizeWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:maximize'),
+  isWindowMaximized: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:is-maximized'),
+  closeWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:close'),
 });
 
 contextBridge.exposeInMainWorld('barcodeFlow', {

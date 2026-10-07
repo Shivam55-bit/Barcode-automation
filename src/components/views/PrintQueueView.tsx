@@ -382,7 +382,7 @@ export const PrintQueueView: React.FC<PrintQueueViewProps> = ({
                   <thead className="bg-slate-100 font-semibold text-slate-700 sticky top-0 border-b border-slate-200">
                     <tr>
                       <th className="py-2 px-3 w-12 text-center text-slate-400">#</th>
-                      {Object.keys(snapshotModalJob.dataSnapshot[0]).map((col) => (
+                      {Object.keys(snapshotModalJob.dataSnapshot[0] || {}).map((col) => (
                         <th key={col} className="py-2 px-3 whitespace-nowrap">
                           {col}
                         </th>
@@ -393,7 +393,7 @@ export const PrintQueueView: React.FC<PrintQueueViewProps> = ({
                     {snapshotModalJob.dataSnapshot.map((row, idx) => (
                       <tr key={idx} className="hover:bg-slate-50/80">
                         <td className="py-2 px-3 text-center text-slate-400">{idx + 1}</td>
-                        {Object.keys(snapshotModalJob.dataSnapshot![0]).map((col) => {
+                        {Object.keys(snapshotModalJob.dataSnapshot?.[0] || {}).map((col) => {
                           const val = String(row[col] ?? '');
                           const isLeadingZero = /^0[0-9]+$/.test(val);
                           return (

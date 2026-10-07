@@ -57,13 +57,14 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
   // Handle open recent with disk existence verification
   const handleAttemptOpenRecent = useCallback(
     async (item: RecentDocumentEntry) => {
-      const exists = await checkFileExistsOnDisk(item.filePath);
+      const targetPath = item.absolutePath || item.filePath;
+      const exists = await checkFileExistsOnDisk(targetPath);
       if (!exists) {
         setMissingFileItem(item);
         return;
       }
       onClose();
-      onOpenRecentDocument(item.filePath);
+      onOpenRecentDocument(targetPath);
     },
     [onClose, onOpenRecentDocument]
   );
@@ -148,7 +149,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      {/* Classic BarTender Windows Desktop Dialog Window */}
+      {/* BarcodeFlow desktop welcome dialog */}
       <div
         ref={modalRef}
         className="relative w-[560px] max-w-[95vw] bg-[#f0f4f9] border border-[#7088a8] rounded-sm shadow-2xl flex flex-col overflow-hidden text-slate-800 font-sans"
@@ -159,13 +160,13 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
         {/* 1. Windows Classic Title Bar */}
         <div className="h-7 bg-gradient-to-r from-[#d9e5f4] via-[#e6effa] to-[#d4e2f2] border-b border-[#a6bcd6] flex items-center justify-between px-2.5">
           <div className="flex items-center gap-1.5">
-            {/* BarTender Icon */}
+            {/* BarcodeFlow mark */}
             <div className="w-3.5 h-3.5 bg-[#0052cc] rounded-[2px] flex items-center justify-center shadow-xs">
               <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 text-white fill-current">
                 <path d="M2 4h2v16H2V4zm4 0h1v16H6V4zm3 0h2v16H9V4zm4 0h3v16h-3V4zm5 0h1v16h-1V4zm3 0h1v16h-1V4z" />
               </svg>
             </div>
-            <span className="text-[12px] font-semibold text-slate-800 tracking-tight">BarTender</span>
+            <span className="text-[12px] font-semibold text-slate-800 tracking-tight">BarcodeFlow</span>
           </div>
 
           <button
@@ -178,7 +179,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
           </button>
         </div>
 
-        {/* 2. Top Header Graphic / Welcome Banner (Faithful BarTender Design) */}
+        {/* 2. BarcodeFlow welcome banner */}
         <div className="relative bg-gradient-to-r from-[#ffffff] via-[#ebf4fd] to-[#bfe0f8] border-b border-[#cbd7e6] px-6 py-3.5 flex items-center justify-between overflow-hidden min-h-[76px]">
           {/* Watermark barcode numbers, codes and stripes */}
           <div className="absolute inset-0 pointer-events-none select-none opacity-20 overflow-hidden flex items-center justify-end pr-2">
@@ -195,7 +196,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
             </p>
           </div>
 
-          {/* Right: BarTender Artwork (CD Disc + Barcode Labels) */}
+          {/* Barcode and label artwork */}
           <div className="relative z-10 flex items-center gap-1.5 pr-1 shrink-0">
             {/* Horizontal Barcode Label */}
             <div className="w-[52px] h-[26px] bg-white border border-slate-300 rounded-[2px] shadow-xs flex flex-col justify-center px-1">
@@ -262,7 +263,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
         <div className="p-6 flex flex-col space-y-4 bg-[#f0f4f9]">
           <p className="text-[12.5px] font-semibold text-slate-800">What would you like to do?</p>
 
-          {/* Action 1: Start New BarTender Document */}
+          {/* Action 1: Start a new document */}
           <button
             type="button"
             onClick={() => {
@@ -271,7 +272,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
             }}
             className="group flex items-center gap-3.5 w-full p-2.5 text-left rounded-[3px] bg-[#f8fbfe]/60 hover:bg-[#e2ecf7] active:bg-[#d0e0f3] border border-transparent hover:border-[#8cb0db] transition-all cursor-pointer shadow-2xs hover:shadow-xs"
           >
-            {/* Custom BarTender Sunburst New Document Icon */}
+            {/* New document icon */}
             <div className="relative w-9 h-9 rounded-[2px] bg-white border border-[#9ebcdb] shadow-xs flex items-center justify-center shrink-0 group-hover:border-blue-500">
               <FileText className="w-5 h-5 text-slate-700" />
               {/* Golden 8-point Sparkle / Sun Badge */}
@@ -284,7 +285,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
 
             <div>
               <div className="text-[12.5px] font-semibold text-slate-900 group-hover:text-blue-900">
-                <span className="underline decoration-slate-400 group-hover:decoration-blue-700">S</span>tart a new BarTender document...
+                <span className="underline decoration-slate-400 group-hover:decoration-blue-700">S</span>tart a new BarcodeFlow document...
               </div>
               <div className="text-[10.5px] text-slate-500 mt-0.5">
                 Create a blank label or choose from predefined industry templates using the New Document Wizard
@@ -292,7 +293,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
             </div>
           </button>
 
-          {/* Action 2: Open Existing BarTender Document */}
+          {/* Action 2: Open an existing document */}
           <button
             type="button"
             onClick={() => {
@@ -310,10 +311,10 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
 
             <div>
               <div className="text-[12.5px] font-semibold text-slate-900 group-hover:text-blue-900">
-                <span className="underline decoration-slate-400 group-hover:decoration-blue-700">O</span>pen an existing BarTender document...
+                <span className="underline decoration-slate-400 group-hover:decoration-blue-700">O</span>pen an existing BarcodeFlow document...
               </div>
               <div className="text-[10.5px] text-slate-500 mt-0.5">
-                Browse disk for saved .bfl, .btw, or JSON document files
+                Open .bfl or JSON files, or choose a .btw file for limited import.
               </div>
             </div>
           </button>
@@ -325,7 +326,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
                 <Clock className="w-2.5 h-2.5 text-slate-600" />
               </div>
               <span className="text-[11.5px] font-semibold text-slate-800">
-                Open a <span className="underline decoration-slate-400">r</span>ecently used BarTender document:
+                Open a <span className="underline decoration-slate-400">r</span>ecently used BarcodeFlow document:
               </span>
             </div>
 
@@ -342,9 +343,11 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
               ) : (
                 recentDocuments.slice(0, 10).map((item, index) => {
                   const isSelected = index === selectedIndex;
+                  const itemPath = item.absolutePath || item.filePath;
+                  const itemName = item.displayName || item.fileName || itemPath.split(/[\\/]/).pop() || 'Document.bfl';
                   return (
                     <div
-                      key={item.filePath}
+                      key={item.id || itemPath}
                       onClick={() => setSelectedIndex(index)}
                       onDoubleClick={() => handleAttemptOpenRecent(item)}
                       onContextMenu={(e) => {
@@ -358,13 +361,13 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
                           ? 'bg-[#3399ff] text-white font-medium'
                           : 'text-slate-800 hover:bg-[#e5f1fb]'
                       }`}
-                      title={`${item.fileName || item.filePath}\n${item.filePath}`}
+                      title={`${itemName}\n${itemPath}`}
                     >
                       <div className="flex items-center gap-1.5 truncate min-w-0 pr-2">
                         <FileText
                           className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-white' : 'text-slate-500'}`}
                         />
-                        <span className="truncate">{item.fileName || item.filePath.split(/[\\/]/).pop()}</span>
+                        <span className="truncate">{itemName}</span>
                       </div>
 
                       {item.lastOpenedAt && (
@@ -403,15 +406,18 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2">
-            {recentDocuments.length > 0 && selectedIndex >= 0 && selectedIndex < recentDocuments.length && (
-              <button
-                type="button"
-                onClick={() => handleAttemptOpenRecent(recentDocuments[selectedIndex])}
-                className="px-4 py-1 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-[2px] text-[11.5px] font-semibold shadow-xs transition-colors cursor-pointer"
-              >
-                Open Selected
-              </button>
-            )}
+            <button
+              type="button"
+              disabled={!(recentDocuments.length > 0 && selectedIndex >= 0 && selectedIndex < recentDocuments.length)}
+              onClick={() => {
+                if (recentDocuments.length > 0 && selectedIndex >= 0 && selectedIndex < recentDocuments.length) {
+                  handleAttemptOpenRecent(recentDocuments[selectedIndex]);
+                }
+              }}
+              className="px-4 py-1 rounded-[2px] text-[11.5px] font-semibold shadow-xs transition-colors cursor-pointer disabled:cursor-not-allowed disabled:bg-[#d0d7de] disabled:text-[#8c959f] disabled:border disabled:border-[#d0d7de] bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white"
+            >
+              Open Selected
+            </button>
 
             <button
               type="button"
@@ -485,7 +491,7 @@ export const WelcomeModal: React.FC<WelcomeModalProps> = ({
           <div className="w-[440px] bg-white border border-[#7088a8] rounded-xs shadow-2xl overflow-hidden text-slate-800">
             {/* Title */}
             <div className="h-7 bg-[#e4ebf5] border-b border-[#cbd5e1] px-3 flex items-center justify-between">
-              <span className="text-[11.5px] font-bold text-slate-800">BarTender - File Not Found</span>
+              <span className="text-[11.5px] font-bold text-slate-800">BarcodeFlow - File Not Found</span>
               <button
                 type="button"
                 onClick={() => setMissingFileItem(null)}

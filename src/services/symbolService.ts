@@ -170,7 +170,7 @@ export const CONTROL_CHARACTERS: ControlCharacterInfo[] = [
   { code: 6, hex: '06', abbr: 'ACK', name: 'Acknowledge', description: 'Affirmative response / handshake', char: '\x06' },
   { code: 7, hex: '07', abbr: 'BEL', name: 'Bell', description: 'Audible or visual alarm/beep', char: '\x07' },
   { code: 8, hex: '08', abbr: 'BS', name: 'Backspace', description: 'Moves cursor backward one space', char: '\x08' },
-  { code: 9, hex: '09', abbr: 'HT / TAB', name: 'Horizontal Tab', description: 'Advances cursor to next tab stop', char: '\t' },
+  { code: 9, hex: '09', abbr: 'HT', name: 'Horizontal Tab', description: 'Advances cursor to next tab stop', char: '\t' },
   { code: 10, hex: '0A', abbr: 'LF', name: 'Line Feed', description: 'Advances cursor to next line', char: '\n' },
   { code: 11, hex: '0B', abbr: 'VT', name: 'Vertical Tab', description: 'Advances cursor to next vertical tab', char: '\x0B' },
   { code: 12, hex: '0C', abbr: 'FF', name: 'Form Feed', description: 'Page eject / advances to next page/label', char: '\x0C' },
@@ -196,7 +196,7 @@ export const CONTROL_CHARACTERS: ControlCharacterInfo[] = [
     abbr: 'GS', 
     name: 'Group Separator', 
     description: 'Information separator 3', 
-    barcodeUsage: 'CRITICAL: Used in GS1-128, GS1 DataMatrix, and QR Code as FNC1 variable-length AI delimiter.', 
+    barcodeUsage: 'ASCII GS payload; distinct from a symbology-specific FNC1 instruction',
     char: '\x1D' 
   },
   { code: 30, hex: '1E', abbr: 'RS', name: 'Record Separator', description: 'Information separator 2 (Used in ISO/IEC 15434 format headers)', char: '\x1E' },
@@ -205,13 +205,13 @@ export const CONTROL_CHARACTERS: ControlCharacterInfo[] = [
 ];
 
 export const DEFAULT_RECENT_SYMBOLS = [
-  '€', '£', '¥', '©', '®', '™', '·', '§', '†', '‡', '¶', '«', '»', '¼', '½', '¾', '°', '±', '≤', '≥', '≠', '₹'
+  '«CR»', '«LF»', '«GS»', '€', '£', '¥', '₹', '©', '®', '™', '·', '§', '†', '‡', '¶', '«', '»', '¼', '½', '¾', '°', '±', '≤', '≥'
 ];
 
 const RECENT_SYMBOLS_STORAGE_KEY = 'barcodeflow_recent_symbols';
 
 /**
- * Get recently used symbols from localStorage
+ * Get recently used symbols and control character tokens from localStorage
  */
 export function getRecentSymbols(): string[] {
   try {
@@ -228,13 +228,13 @@ export function getRecentSymbols(): string[] {
 }
 
 /**
- * Add a character to the front of recently used symbols
+ * Add a symbol or control character token to the front of recently used items
  */
-export function addRecentSymbol(char: string): string[] {
-  if (!char) return getRecentSymbols();
+export function addRecentSymbol(charOrToken: string): string[] {
+  if (!charOrToken) return getRecentSymbols();
   try {
-    const recents = getRecentSymbols().filter((c) => c !== char);
-    const updated = [char, ...recents].slice(0, 30);
+    const recents = getRecentSymbols().filter((c) => c !== charOrToken);
+    const updated = [charOrToken, ...recents].slice(0, 30);
     localStorage.setItem(RECENT_SYMBOLS_STORAGE_KEY, JSON.stringify(updated));
     return updated;
   } catch (err) {

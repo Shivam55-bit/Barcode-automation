@@ -1,7 +1,19 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { LabelTemplate, LabelElement, TextElement, CanvasGuide, ViewportState, OpenDocument } from '../../types';
-import { measureTextObject } from '../../services/textMeasurementEngine';
+import { LabelTemplate, LabelElement, TextElement, BarcodeElement, CanvasGuide, ViewportState, OpenDocument } from '../../types';
+import { isMultiLineTextElement, isSingleLineTextElement, isTextFitToBoxEnabled, measureTextObject, normalizeTextForObjectType } from '../../services/textMeasurementEngine';
 import { evaluateElementData } from '../../services/dataSourceEngine';
+import { calculateBarcodeLayout, getSymbologyMetadata, getBarcodeModuleColumns, quantizeBarcodeWidth } from '../../services/barcodeEngine';
+import { resizeBox, rotateFromPointer, type ResizeHandle } from '../../services/resizeGeometry';
+import {
+  CSS_PIXELS_PER_MM,
+  MAX_VIEW_ZOOM,
+  MIN_VIEW_ZOOM,
+  documentToViewport,
+  fitDocumentRect,
+  normalizeViewportRect,
+  viewportToDocument,
+  type ViewportPoint,
+} from '../../services/viewportGeometry';
 import { HorizontalRuler, VerticalRuler, RulerCorner } from './Rulers';
 import { CanvasElement } from './CanvasElement';
 import { ContextMenu } from './ContextMenu';
@@ -9,12 +21,40 @@ import { RightVerticalToolbar } from './RightVerticalToolbar';
 import { DocumentTabBar } from './DocumentTabBar';
 import { Printer, Plus, ZoomIn, ZoomOut, Target, Maximize2, FileText, FolderOpen, ChevronDown, Check, Scan, MoveHorizontal, Frame } from 'lucide-react';
 
+import { flushSync } from 'react-dom';
+
+interface ResizeInitialState {
+  elementId: string;
+  element: LabelElement;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  fontSize: number;
+  fontWidthScale: number;
+  lineHeight: number;
+  letterSpacing: number;
+  barWidth?: number;
+  barHeight?: number;
+  xDimensionMm?: number;
+  moduleColumns?: number;
+  pointerClientX: number;
+  pointerClientY: number;
+  handle: string;
+  isText: boolean;
+  isBarcode: boolean;
+  isParagraph: boolean;
+}
+
 interface DesignerCanvasProps {
   template: LabelTemplate;
   selectedElementIds: string[];
   onSelectElements: (ids: string[]) => void;
-  onUpdateElement: (id: string, updates: Partial<LabelElement>) => void;
-  onUpdateMultipleElements: (updates: { id: string; updates: Partial<LabelElement> }[]) => void;
+  onUpdateElement: (id: string, updates: Partial<LabelElement>, skipHistory?: boolean) => void;
+  onRestoreElement: (element: LabelElement) => void;
+  onUpdateMultipleElements: (updates: { id: string; updates: Partial<LabelElement> }[], skipHistory?: boolean) => void;
+  onCommitHistory?: () => void;
   onDeleteSelected: () => void;
   onDuplicateSelected: () => void;
   onCut: () => void;
@@ -32,6 +72,8 @@ interface DesignerCanvasProps {
   onOpenProperties?: () => void;
   onOpenBarcodePicker: () => void;
   onOpenBarcodeProperties?: () => void;
+  onOpenRichTextEditor?: (el: TextElement) => void;
+  onOpenSymbolPicker?: (el: TextElement) => void;
   onOpenPageSetup?: () => void;
   onInsertElementAt?: (el: Partial<LabelElement>, xMm: number, yMm: number) => void;
   onInsertPresetAt?: (presetKey: string, xMm: number, yMm: number) => void;
@@ -39,6 +81,10 @@ interface DesignerCanvasProps {
   onInsertBoundElementAt?: (payload: any, xMm: number, yMm: number, asType?: 'text' | 'barcode' | 'qr') => void;
   viewport: ViewportState;
   setViewport: React.Dispatch<React.SetStateAction<ViewportState>>;
+  onRegisterFitToWindow?: (fit: (() => void) | null) => void;
+  onRegisterExitFitMode?: (exitFit: (() => void) | null) => void;
+  onExitZoomRectangle?: () => void;
+  onZoomRectangleTool?: () => void;
   recordData: Record<string, string>;
   onCursorMove?: (xMm: number, yMm: number) => void;
   // Multi-Document Tabs
@@ -64,7 +110,9 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   selectedElementIds,
   onSelectElements,
   onUpdateElement,
+  onRestoreElement,
   onUpdateMultipleElements,
+  onCommitHistory,
   onDeleteSelected,
   onDuplicateSelected,
   onCut,
@@ -82,6 +130,8 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   onOpenProperties,
   onOpenBarcodePicker,
   onOpenBarcodeProperties,
+  onOpenRichTextEditor,
+  onOpenSymbolPicker,
   onOpenPageSetup,
   onInsertElementAt,
   onInsertPresetAt,
@@ -89,6 +139,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   onInsertBoundElementAt,
   viewport,
   setViewport,
+  onRegisterFitToWindow,
+  onRegisterExitFitMode,
+  onExitZoomRectangle,
+  onZoomRectangleTool,
   recordData,
   onCursorMove,
   documents,
@@ -112,6 +166,15 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isFitMode, setIsFitMode] = useState(false);
+  const isFitModeRef = useRef(false);
+  const [zoomRect, setZoomRect] = useState<{ start: ViewportPoint; current: ViewportPoint } | null>(null);
+  const zoomRectGestureRef = useRef<{
+    pointerId: number;
+    start: ViewportPoint;
+    current: ViewportPoint;
+    transform: { zoom: number; panX: number; panY: number };
+  } | null>(null);
 
   // Dragging elements state
   const [isDragging, setIsDragging] = useState(false);
@@ -121,17 +184,65 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   // Resizing state
   const [isResizing, setIsResizing] = useState(false);
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
-  const [resizeInitialState, setResizeInitialState] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [resizingElementId, setResizingElementId] = useState<string | null>(null);
+  const [resizeInitialState, setResizeInitialState] = useState<ResizeInitialState | null>(null);
 
   // Rotation state
   const [isRotating, setIsRotating] = useState(false);
   const [rotatingElementId, setRotatingElementId] = useState<string | null>(null);
   const [rotateCenter, setRotateCenter] = useState<{ x: number; y: number } | null>(null);
+  const gestureRef = useRef<{ element: LabelElement; pointerId: number; originalAngle?: number } | null>(null);
 
   // Selection box state
   const [isBoxSelecting, setIsBoxSelecting] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+
+  const cancelGesture = useCallback(() => {
+    const gesture = gestureRef.current;
+    if (!gesture) return;
+    gestureRef.current = null;
+    onRestoreElement(gesture.element);
+    if (containerRef.current?.hasPointerCapture(gesture.pointerId)) containerRef.current.releasePointerCapture(gesture.pointerId);
+    setIsResizing(false);
+    setIsRotating(false);
+    setResizeInitialState(null);
+  }, [onRestoreElement]);
+
+  const exitFitMode = useCallback(() => {
+    isFitModeRef.current = false;
+    setIsFitMode(false);
+  }, []);
+  const cancelZoomRectangle = useCallback(() => {
+    const gesture = zoomRectGestureRef.current;
+    zoomRectGestureRef.current = null;
+    setZoomRect(null);
+    if (gesture && containerRef.current?.hasPointerCapture(gesture.pointerId)) {
+      containerRef.current.releasePointerCapture(gesture.pointerId);
+    }
+    if (activeTool === 'zoom-rect') onExitZoomRectangle?.();
+  }, [activeTool, onExitZoomRectangle]);
+
+  useEffect(() => {
+    if (activeTool !== 'zoom-rect' && zoomRectGestureRef.current) {
+      cancelZoomRectangle();
+    }
+  }, [activeTool, cancelZoomRectangle]);
+
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && activeTool === 'zoom-rect') {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelZoomRectangle();
+      } else if (event.key === 'Escape' && gestureRef.current) {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelGesture();
+      }
+    };
+    window.addEventListener('keydown', onEscape, true);
+    return () => window.removeEventListener('keydown', onEscape, true);
+  }, [activeTool, cancelGesture, cancelZoomRectangle]);
 
   // Interactive guides state
   const [guides, setGuides] = useState<CanvasGuide[]>([
@@ -150,6 +261,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   }, [selectedElementIds, editingElementId]);
 
   const handleStartTextEdit = useCallback((el: LabelElement) => {
+    if (activeTool === 'zoom-rect') return;
     if (el.locked || el.isEditable === false || el.editable === false) return;
     if (el.type !== 'text') return;
 
@@ -170,7 +282,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     }
 
     setEditingElementId(el.id);
-  }, [onDataEditElement, onOpenProperties]);
+  }, [activeTool, onDataEditElement, onOpenProperties]);
 
   const handleCommitInlineText = useCallback((id: string, newText: string) => {
     const targetEl = template.elements.find((e) => e.id === id);
@@ -180,29 +292,28 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     }
 
     const textEl = targetEl as TextElement;
-    if (textEl.text === newText) {
+    const normalizedText = normalizeTextForObjectType(newText, textEl.textType || (isSingleLineTextElement(textEl) ? 'single-line' : 'multi-line'));
+    if (textEl.text === normalizedText) {
       setEditingElementId(null);
       return;
     }
 
     const updates: Partial<TextElement> = {
-      text: newText,
+      text: normalizedText,
     };
 
     if (textEl.dataSources && textEl.dataSources.length === 1 && textEl.dataSources[0].type === 'embedded') {
       updates.dataSources = [{ ...textEl.dataSources[0], value: newText }];
     }
 
-    const isAutoSizeActive =
-      textEl.autoSize !== false &&
-      (textEl.autoSize === true ||
-        textEl.autoSizeConfig?.enabled === true ||
-        textEl.textType === 'single-line' ||
-        !textEl.textType ||
-        textEl.textFormatType === 'single-line');
+    const isMultiLine = isMultiLineTextElement(textEl);
 
-    if (isAutoSizeActive) {
-      const isParagraph = textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph';
+    // Only single-line in explicit auto-width mode recalculates container width and height
+    const isSingleLineAutoWidth =
+      isSingleLineTextElement(textEl) &&
+      (textEl.sizingMode === 'auto-width' || (!textEl.sizingMode && textEl.autoSize !== false));
+
+    if (isSingleLineAutoWidth) {
       const dims = measureTextObject({
         text: newText,
         fontFamily: textEl.fontFamily,
@@ -211,17 +322,39 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         fontStyle: textEl.fontStyle,
         letterSpacing: textEl.letterSpacing,
         lineHeight: textEl.lineHeight,
-        fontWidthScale: textEl.fontWidthScale,
-        textType: textEl.textType,
-        textFormatType: textEl.textFormatType,
-        multiline: textEl.multiline,
-        wrap: textEl.wrap || textEl.wordWrap,
-        containerWidthMm: isParagraph && textEl.width > 0 ? textEl.width : undefined,
+        fontWidthScale: textEl.fontWidthScale || 100,
+        textType: 'single-line',
+        textFormatType: 'single-line',
+        multiline: false,
+        wrap: false,
         borderConfig: textEl.borderConfig,
+        ignoreMinSize: true,
       });
-      updates.width = isParagraph && textEl.width > 0 ? textEl.width : dims.width;
+      updates.width = dims.width;
       updates.height = dims.height;
       updates.autoSize = true;
+      updates.sizingMode = 'auto-width';
+    }
+
+    const autoHeightEnabled = textEl.autoHeight ?? textEl.autoSize === true;
+    if (autoHeightEnabled && (textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph')) {
+      const dimensions = measureTextObject({
+        text: normalizedText,
+        fontFamily: textEl.fontFamily,
+        fontSize: textEl.fontSize,
+        fontWeight: textEl.fontWeight,
+        fontStyle: textEl.fontStyle,
+        letterSpacing: textEl.letterSpacing,
+        lineHeight: textEl.lineHeight,
+        fontWidthScale: textEl.fontWidthScale || 100,
+        textType: 'paragraph',
+        textFormatType: 'paragraph',
+        multiline: true,
+        wrap: textEl.wrap !== false && textEl.wordWrap !== false,
+        containerWidthMm: textEl.width,
+        borderConfig: textEl.borderConfig,
+      });
+      updates.height = dimensions.height;
     }
 
     onUpdateElement(id, updates);
@@ -233,8 +366,18 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
   }, []);
 
   const handleDraftResize = useCallback((id: string, widthMm: number, heightMm: number) => {
-    onUpdateElement(id, { width: widthMm, height: heightMm, autoSize: true });
-  }, [onUpdateElement]);
+    const el = template.elements.find((e) => e.id === id);
+    if (el && el.type === 'text') {
+      const txt = el as TextElement;
+      const isMulti = isMultiLineTextElement(txt);
+      const autoHeight = txt.autoHeight ?? txt.autoSize === true;
+      if (!isMulti && (txt.sizingMode === 'auto-width' || (!txt.sizingMode && txt.autoSize !== false))) {
+        onUpdateElement(id, { width: widthMm, height: heightMm, autoSize: true }, true);
+      } else if (isMulti && autoHeight && (txt.textFormatType === 'paragraph' || txt.textType === 'paragraph')) {
+        onUpdateElement(id, { height: heightMm }, true);
+      }
+    }
+  }, [template.elements, onUpdateElement]);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; element: LabelElement | null } | null>(null);
@@ -257,8 +400,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     };
   }, [isZoomMenuOpen]);
 
-  // 1mm in screen pixels at 100% zoom = 3.7795px
-  const baseScale = 3.7795;
+  const baseScale = CSS_PIXELS_PER_MM;
   const scale = baseScale * viewport.zoom;
 
   // Selected Element
@@ -292,11 +434,12 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Zoom In (Centered on viewport)
   const handleZoomIn = useCallback(() => {
+    exitFitMode();
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
     const containerHeight = containerRef.current.clientHeight;
     setViewport(v => {
-      const nextZoom = Math.min(32, Number((v.zoom * 1.25).toFixed(2)));
+      const nextZoom = Math.min(MAX_VIEW_ZOOM, Number((v.zoom * 1.25).toFixed(2)));
       const factor = nextZoom / v.zoom;
       const cX = containerWidth / 2;
       const cY = containerHeight / 2;
@@ -304,15 +447,16 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       const nextPanY = Math.round(cY - (cY - v.panY) * factor);
       return { ...v, zoom: nextZoom, panX: nextPanX, panY: nextPanY };
     });
-  }, [setViewport]);
+  }, [setViewport, exitFitMode]);
 
   // Zoom Out (Centered on viewport)
   const handleZoomOut = useCallback(() => {
+    exitFitMode();
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
     const containerHeight = containerRef.current.clientHeight;
     setViewport(v => {
-      const nextZoom = Math.max(0.1, Number((v.zoom / 1.25).toFixed(2)));
+      const nextZoom = Math.max(MIN_VIEW_ZOOM, Number((v.zoom / 1.25).toFixed(2)));
       const factor = nextZoom / v.zoom;
       const cX = containerWidth / 2;
       const cY = containerHeight / 2;
@@ -320,30 +464,55 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       const nextPanY = Math.round(cY - (cY - v.panY) * factor);
       return { ...v, zoom: nextZoom, panX: nextPanX, panY: nextPanY };
     });
-  }, [setViewport]);
+  }, [setViewport, exitFitMode]);
 
   // Fit label to workspace with padding
   const fitToWindow = useCallback(() => {
-    if (!containerRef.current) return;
-    const containerWidth = containerRef.current.clientWidth;
-    const containerHeight = containerRef.current.clientHeight;
-    if (containerWidth <= 0 || containerHeight <= 0) return;
+    const viewportElement = containerRef.current;
+    if (!viewportElement) return;
+    const fitted = fitDocumentRect(
+      { left: 0, top: 0, width: template.dimensions.width, height: template.dimensions.height },
+      viewportElement.clientWidth,
+      viewportElement.clientHeight,
+      24,
+    );
+    if (!fitted) return;
+    setViewport(previous => ({ ...previous, ...fitted }));
+    isFitModeRef.current = true;
+    setIsFitMode(true);
+  }, [template.dimensions.width, template.dimensions.height, setViewport]);
 
-    const availW = Math.max(100, containerWidth - 60);
-    const availH = Math.max(100, containerHeight - 60);
+  useEffect(() => {
+    onRegisterFitToWindow?.(fitToWindow);
+    return () => onRegisterFitToWindow?.(null);
+  }, [fitToWindow, onRegisterFitToWindow]);
 
-    const baseW = template.dimensions.width * baseScale;
-    const baseH = template.dimensions.height * baseScale;
+  useEffect(() => {
+    onRegisterExitFitMode?.(exitFitMode);
+    return () => onRegisterExitFitMode?.(null);
+  }, [exitFitMode, onRegisterExitFitMode]);
 
-    const zoomW = availW / baseW;
-    const zoomH = availH / baseH;
-    const targetZoom = Math.max(0.1, Math.min(10.0, Number(Math.min(zoomW, zoomH).toFixed(2))));
+  useEffect(() => {
+    const viewportElement = containerRef.current;
+    if (!isFitMode || !viewportElement) return;
 
-    centerInView(targetZoom);
-  }, [template.dimensions.width, template.dimensions.height, centerInView]);
+    const observer = new ResizeObserver(() => {
+      if (!isFitModeRef.current) return;
+      const fitted = fitDocumentRect(
+        { left: 0, top: 0, width: template.dimensions.width, height: template.dimensions.height },
+        viewportElement.clientWidth,
+        viewportElement.clientHeight,
+        24,
+      );
+      if (fitted) setViewport(previous => ({ ...previous, ...fitted }));
+    });
+    observer.observe(viewportElement);
+    return () => observer.disconnect();
+  }, [template.dimensions.width, template.dimensions.height, setViewport, isFitMode]);
 
   // Fit label width in window
   const fitTemplateWidthInWindow = useCallback(() => {
+    exitFitMode();
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
     const containerHeight = containerRef.current.clientHeight;
@@ -363,10 +532,11 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       panX: targetPanX,
       panY: targetPanY,
     }));
-  }, [template.dimensions.width, template.dimensions.height, setViewport]);
+  }, [template.dimensions.width, template.dimensions.height, setViewport, exitFitMode]);
 
   // Fit all objects in window
   const fitAllObjectsInWindow = useCallback(() => {
+    exitFitMode();
     if (!containerRef.current || template.elements.length === 0) {
       fitToWindow();
       return;
@@ -405,10 +575,11 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       panX: targetPanX,
       panY: targetPanY,
     }));
-  }, [template.elements, fitToWindow, setViewport]);
+  }, [template.elements, fitToWindow, setViewport, exitFitMode]);
 
   // Zoom to selection / rectangle
   const zoomToSelection = useCallback(() => {
+    exitFitMode();
     if (!containerRef.current) return;
     const containerWidth = containerRef.current.clientWidth;
     const containerHeight = containerRef.current.clientHeight;
@@ -450,7 +621,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
       panX: targetPanX,
       panY: targetPanY,
     }));
-  }, [selectedElementIds, template.elements, fitToWindow, setViewport]);
+  }, [selectedElementIds, template.elements, fitToWindow, setViewport, exitFitMode]);
 
   // Auto-fit & center canvas ONLY on initial load and template ID change
   useEffect(() => {
@@ -487,6 +658,88 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     return Number((Math.round(val / gridSizeMm) * gridSizeMm).toFixed(1));
   }, [viewport.snapToGrid]);
 
+  const getClippedViewportPoint = (clientX: number, clientY: number): ViewportPoint | null => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      x: Math.max(0, Math.min(rect.width, clientX - rect.left)),
+      y: Math.max(0, Math.min(rect.height, clientY - rect.top)),
+    };
+  };
+
+  const beginZoomRectangle = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (activeTool !== 'zoom-rect' || event.button !== 0 || !containerRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    exitFitMode();
+    const start = getClippedViewportPoint(event.clientX, event.clientY);
+    if (!start) return;
+    zoomRectGestureRef.current = {
+      pointerId: event.pointerId,
+      start,
+      current: start,
+      transform: { zoom: viewport.zoom, panX: viewport.panX, panY: viewport.panY },
+    };
+    setZoomRect({ start, current: start });
+    containerRef.current.setPointerCapture(event.pointerId);
+  };
+
+  const updateZoomRectangle = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = zoomRectGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    const current = getClippedViewportPoint(event.clientX, event.clientY);
+    if (!current) return;
+    gesture.current = current;
+    setZoomRect({ start: gesture.start, current });
+  };
+
+  const finishZoomRectangle = (event: React.PointerEvent<HTMLDivElement>) => {
+    const gesture = zoomRectGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const current = getClippedViewportPoint(event.clientX, event.clientY) || gesture.current;
+    const selection = normalizeViewportRect(gesture.start, current);
+    const viewportElement = containerRef.current;
+    zoomRectGestureRef.current = null;
+    setZoomRect(null);
+
+    if (
+      viewportElement &&
+      selection.width >= 8 &&
+      selection.height >= 8
+    ) {
+      const docStart = viewportToDocument(
+        { x: selection.left, y: selection.top },
+        gesture.transform,
+      );
+      const docEnd = viewportToDocument(
+        { x: selection.left + selection.width, y: selection.top + selection.height },
+        gesture.transform,
+      );
+      const documentRect = normalizeViewportRect(docStart, docEnd);
+      const fitted = fitDocumentRect(
+        documentRect,
+        viewportElement.clientWidth,
+        viewportElement.clientHeight,
+        24,
+      );
+      if (fitted) setViewport(previous => ({ ...previous, ...fitted }));
+    }
+
+    if (viewportElement.hasPointerCapture(event.pointerId)) {
+      viewportElement.releasePointerCapture(event.pointerId);
+    }
+    onExitZoomRectangle?.();
+  };
+
+  const cancelZoomRectanglePointer = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (zoomRectGestureRef.current?.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelZoomRectangle();
+  };
+
   // Handle Mouse Move over workspace
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!containerRef.current) return;
@@ -495,12 +748,16 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     const mouseY = e.clientY - rect.top;
 
     // Convert to mm on canvas
-    const xMm = (mouseX - viewport.panX) / scale;
-    const yMm = (mouseY - viewport.panY) / scale;
+    const { x: xMm, y: yMm } = viewportToDocument(
+      { x: mouseX, y: mouseY },
+      viewport,
+    );
     const roundedX = Math.round(xMm * 10) / 10;
     const roundedY = Math.round(yMm * 10) / 10;
     setCursorMm({ x: roundedX, y: roundedY });
     onCursorMove?.(roundedX, roundedY);
+
+    if (activeTool === 'zoom-rect') return;
 
     // 1. Panning Workspace
     if (isPanning) {
@@ -515,8 +772,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
     // 2. Dragging Elements with smooth delta & unbounded movement beyond label boundaries
     if (isDragging && dragInitialElements.length > 0) {
-      const deltaX = (e.clientX - dragStartPos.x) / scale;
-      const deltaY = (e.clientY - dragStartPos.y) / scale;
+      const startPoint = viewportToDocument({ x: dragStartPos.x, y: dragStartPos.y }, { ...viewport, panX: 0, panY: 0 });
+      const currentPoint = viewportToDocument({ x: e.clientX, y: e.clientY }, { ...viewport, panX: 0, panY: 0 });
+      const deltaX = currentPoint.x - startPoint.x;
+      const deltaY = currentPoint.y - startPoint.y;
 
       const updates = dragInitialElements.map(item => {
         const targetX = item.x + deltaX;
@@ -530,64 +789,141 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
           },
         };
       });
-      onUpdateMultipleElements(updates);
+      onUpdateMultipleElements(updates, true);
       return;
     }
 
     // 3. Resizing Element
-    if (isResizing && resizingElementId && resizeInitialState && resizeHandle) {
-      const deltaX = (e.clientX - dragStartPos.x) / scale;
-      const deltaY = (e.clientY - dragStartPos.y) / scale;
-      let { x, y, w, h } = resizeInitialState;
-
-      if (resizeHandle.includes('right')) w = Math.max(2, snapValue(w + deltaX));
-      if (resizeHandle.includes('bottom')) h = Math.max(2, snapValue(h + deltaY));
-      if (resizeHandle.includes('left')) {
-        const newW = Math.max(2, snapValue(w - deltaX));
-        x = snapValue(x + (w - newW));
-        w = newW;
-      }
-      if (resizeHandle.includes('top')) {
-        const newH = Math.max(2, snapValue(h - deltaY));
-        y = snapValue(y + (h - newH));
-        h = newH;
-      }
-
-      const targetEl = template.elements.find((el) => el.id === resizingElementId);
-      if (targetEl && targetEl.type === 'text') {
-        const textEl = targetEl as TextElement;
-        const isParagraph = textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph';
-
-        // In paragraph mode with horizontal resize only, reflow height dynamically
-        if (
-          isParagraph &&
-          (resizeHandle === 'middle-left' || resizeHandle === 'middle-right') &&
-          textEl.autoSize !== false
-        ) {
-          const dims = measureTextObject({
-            text: evaluateElementData(textEl, { record: recordData }),
-            fontFamily: textEl.fontFamily,
-            fontSize: textEl.fontSize,
-            fontWeight: textEl.fontWeight,
-            fontStyle: textEl.fontStyle,
-            letterSpacing: textEl.letterSpacing,
-            lineHeight: textEl.lineHeight,
-            fontWidthScale: textEl.fontWidthScale,
-            textType: textEl.textType,
-            textFormatType: textEl.textFormatType,
-            multiline: true,
-            wrap: true,
-            containerWidthMm: w,
-            borderConfig: textEl.borderConfig,
-          });
-          h = dims.height;
-          onUpdateElement(resizingElementId, { x, y, width: w, height: h, autoSize: true });
-        } else {
-          // Explicit manual resize disables Auto Size
-          onUpdateElement(resizingElementId, { x, y, width: w, height: h, autoSize: false, autoFit: false });
+    if (isResizing && resizeInitialState) {
+      const init = resizeInitialState;
+      const isCornerHandle =
+        init.handle === 'top-left' ||
+        init.handle === 'top-right' ||
+        init.handle === 'bottom-left' ||
+        init.handle === 'bottom-right';
+      const targetEl = init.element;
+      const isText = targetEl && targetEl.type === 'text';
+      const textEl = isText ? (targetEl as TextElement) : null;
+      const isArc = textEl ? (textEl.textType === 'arc' || textEl.textFormatType === 'arc') : false;
+      const isMultiLine = textEl ? (textEl.textType === 'multi-line' || textEl.multiline || textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph') : false;
+      const isSingleLineText = isText && !!textEl && !isMultiLine && !isArc;
+      // BarTender parity: corner handles proportionally scale a text object's font (and
+      // letter spacing / per-run sizes), while the side handles change the wrap box only.
+      const scaleTextFont = isCornerHandle && (
+        textEl?.sizingMode === 'scale-text' ||
+        isArc ||
+        (isSingleLineText && !!textEl && !isTextFitToBoxEnabled(textEl))
+      );
+      const is2D = targetEl.type === 'barcode' && getSymbologyMetadata((targetEl as BarcodeElement).symbology).is2D;
+      const isBarcode = targetEl.type === 'barcode';
+      const resized = resizeBox(
+        { x: init.x, y: init.y, width: init.w, height: init.h, rotation: init.rotation },
+        init.handle as ResizeHandle,
+        { x: e.clientX - init.pointerClientX, y: e.clientY - init.pointerClientY },
+        scale,
+        {
+          // 1D barcodes resize width (module/X-dimension) and height (bar height)
+          // independently; only 2D symbologies keep square modules via lockAspectRatio.
+          proportional: (!isText && !isBarcode) || isArc || textEl?.sizingMode === 'scale-text' || scaleTextFont,
+          lockAspectRatio: is2D,
+          quantizeWidth: init.moduleColumns ? width => quantizeBarcodeWidth(width, init.moduleColumns!, template.dimensions.dpi || 300).width : undefined,
+          minScale: isText && scaleTextFont ? (textEl?.minFontSize ?? 1) / init.fontSize : undefined,
+          maxScale: isText && scaleTextFont ? (textEl?.maxFontSize ?? 720) / init.fontSize : undefined,
+          snapDelta: viewport.snapToGrid && viewport.gridSize > 0 ? delta => Math.round(delta / viewport.gridSize) * viewport.gridSize : undefined,
         }
+      );
+      const { x: newX, y: newY, width: newW, height: newH, scale: uniformScale } = resized;
+
+      if (isText && textEl) {
+        if (scaleTextFont) {
+          onUpdateElement(init.elementId, {
+            x: newX,
+            y: newY,
+            width: newW,
+            height: newH,
+            fontSize: Number((init.fontSize * uniformScale).toFixed(4)),
+            fontWidthScale: 100,
+            letterSpacing: init.letterSpacing * uniformScale,
+            runs: textEl.runs?.map(run => ({ ...run, fontSize: (run.fontSize ?? init.fontSize) * uniformScale })),
+            blocks: textEl.blocks?.map(block => ({ ...block, runs: block.runs.map(run => ({ ...run, fontSize: (run.fontSize ?? init.fontSize) * uniformScale })) })),
+            ...(isArc ? {
+              arcRadius: (textEl.arcConfig?.radius ?? textEl.arcRadius ?? 50) * uniformScale,
+              arcConfig: {
+                startAngle: textEl.arcStartAngle ?? 0,
+                sweepAngle: textEl.arcSweepAngle ?? 180,
+                direction: textEl.arcDirection ?? 'clockwise',
+                insidePath: !!textEl.arcInsidePath,
+                characterSpacing: textEl.arcCharacterSpacing ?? 1,
+                ...textEl.arcConfig,
+                radius: (textEl.arcConfig?.radius ?? textEl.arcRadius ?? 50) * uniformScale,
+              },
+            } : {}),
+            sizingMode: isArc ? textEl.sizingMode : 'scale-text',
+            autoSize: false,
+            autoFit: false,
+          }, true);
+        } else if (isMultiLine) {
+          // Multi-line container resize (any of the 8 handles):
+          // Left: x changes + width changes
+          // Right: width changes
+          // Top: y changes + height changes
+          // Bottom: height changes
+          // Corners: width + height change
+          // Text reflows inside container; font size NEVER changes.
+          const autoHeightEnabled = !isTextFitToBoxEnabled(textEl) && (textEl.autoHeight ?? textEl.autoSize === true);
+          const setsFixedHeight = init.handle !== 'middle-left' && init.handle !== 'middle-right';
+          onUpdateElement(init.elementId, {
+            x: newX,
+            y: newY,
+            width: newW,
+            height: newH,
+            autoSize: false,
+            autoHeight: autoHeightEnabled && !setsFixedHeight,
+            autoFit: isTextFitToBoxEnabled(textEl),
+          }, true);
+        } else {
+          // Single-line text resize (any of the 8 handles):
+          // User manually sizing width switches single-line to fixed-width mode
+          // Glyph shapes NEVER scale or distort; font size NEVER changes.
+          onUpdateElement(init.elementId, {
+            x: newX,
+            y: newY,
+            width: newW,
+            height: newH,
+            sizingMode: textEl.sizingMode === 'auto-width' ? 'fixed-width' : textEl.sizingMode || 'fixed-width',
+            autoSize: false,
+            autoFit: isTextFitToBoxEnabled(textEl),
+          }, true);
+        }
+      } else if (targetEl && targetEl.type === 'barcode') {
+        const barcodeEl = targetEl as BarcodeElement;
+        const widthScale = newW / Math.max(1, init.w);
+        const newXDim = init.moduleColumns
+          ? newW / init.moduleColumns
+          : (init.xDimensionMm || barcodeEl.xDimensionMm || 0.38) * widthScale;
+
+        const hrtMetrics = calculateBarcodeLayout(barcodeEl);
+        const newBarH = barcodeEl.includeText && hrtMetrics.hrtHeightMm > 0
+          ? Math.max(0.5, newH - hrtMetrics.hrtHeightMm - hrtMetrics.hrtGapMm)
+          : newH;
+
+        onUpdateElement(init.elementId, {
+          x: newX,
+          y: newY,
+          width: newW,
+          height: newH,
+          barHeight: newBarH,
+          xDimensionMm: newXDim,
+          moduleWidth: newXDim,
+          symbol: { ...barcodeEl.symbol, barHeight: newBarH, moduleWidth: newXDim },
+        }, true);
       } else {
-        onUpdateElement(resizingElementId, { x, y, width: w, height: h });
+        onUpdateElement(init.elementId, {
+          x: newX,
+          y: newY,
+          width: newW,
+          height: newH,
+        }, true);
       }
       return;
     }
@@ -595,12 +931,10 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     // 4. Rotating Element
     if (isRotating && rotatingElementId && rotateCenter) {
       const angleRad = Math.atan2(e.clientY - rotateCenter.y, e.clientX - rotateCenter.x);
-      let angleDeg = Math.round((angleRad * 180) / Math.PI + 90);
-      if (angleDeg < 0) angleDeg += 360;
-      if (e.shiftKey) {
-        angleDeg = Math.round(angleDeg / 15) * 15;
+      const gesture = gestureRef.current;
+      if (gesture?.originalAngle !== undefined) {
+        onUpdateElement(rotatingElementId, { rotation: rotateFromPointer(gesture.element.rotation || 0, gesture.originalAngle, angleRad, e.shiftKey) }, true);
       }
-      onUpdateElement(rotatingElementId, { rotation: angleDeg % 360 });
       return;
     }
 
@@ -612,20 +946,38 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Mouse Up End Actions
   const handleMouseUp = () => {
-    setIsPanning(false);
-    setIsDragging(false);
-    setIsResizing(false);
-    setIsRotating(false);
+    if (activeTool === 'zoom-rect') return;
+    const gesture = gestureRef.current;
+    gestureRef.current = null;
+    if (gesture && containerRef.current?.hasPointerCapture(gesture.pointerId)) containerRef.current.releasePointerCapture(gesture.pointerId);
+    flushSync(() => {
+      if (isDragging || isResizing || isRotating) {
+        onCommitHistory?.();
+      }
+      setIsPanning(false);
+      setIsDragging(false);
+      setIsResizing(false);
+      setIsRotating(false);
+      setResizeInitialState(null);
+    });
 
     if (isBoxSelecting && selectionBox && containerRef.current) {
       const dragDist = Math.hypot(selectionBox.startX - selectionBox.currentX, selectionBox.startY - selectionBox.currentY);
       // Only perform multi-element bounding box selection if user actively dragged > 4px
       if (dragDist > 4) {
         const rect = containerRef.current.getBoundingClientRect();
-        const minX = (Math.min(selectionBox.startX, selectionBox.currentX) - rect.left - viewport.panX) / scale;
-        const maxX = (Math.max(selectionBox.startX, selectionBox.currentX) - rect.left - viewport.panX) / scale;
-        const minY = (Math.min(selectionBox.startY, selectionBox.currentY) - rect.top - viewport.panY) / scale;
-        const maxY = (Math.max(selectionBox.startY, selectionBox.currentY) - rect.top - viewport.panY) / scale;
+        const startDoc = viewportToDocument(
+          { x: Math.min(selectionBox.startX, selectionBox.currentX) - rect.left, y: Math.min(selectionBox.startY, selectionBox.currentY) - rect.top },
+          viewport,
+        );
+        const endDoc = viewportToDocument(
+          { x: Math.max(selectionBox.startX, selectionBox.currentX) - rect.left, y: Math.max(selectionBox.startY, selectionBox.currentY) - rect.top },
+          viewport,
+        );
+        const minX = startDoc.x;
+        const maxX = endDoc.x;
+        const minY = startDoc.y;
+        const maxY = endDoc.y;
 
         const hitElements = template.elements.filter(
           el => el.x < maxX && el.x + el.width > minX && el.y < maxY && el.y + el.height > minY
@@ -639,7 +991,13 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Start Canvas Background Mouse Down (Pan or Box Select or Deselect)
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
+    if (activeTool === 'zoom-rect') {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.button === 1 || isSpacePressed) {
+      exitFitMode();
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
       return;
@@ -666,12 +1024,13 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Mouse Wheel Zoom / Pan
   const handleWheel = (e: React.WheelEvent) => {
+    exitFitMode();
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = e.deltaY < 0 ? 0.1 : -0.1;
       setViewport(prev => ({
         ...prev,
-        zoom: Math.max(0.1, Math.min(8, Number((prev.zoom + delta).toFixed(2)))),
+        zoom: Math.max(MIN_VIEW_ZOOM, Math.min(MAX_VIEW_ZOOM, Number((prev.zoom + delta).toFixed(2)))),
       }));
     } else {
       setViewport(prev => ({
@@ -684,6 +1043,11 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Element Selection with Group Awareness
   const handleElementSelect = (e: React.MouseEvent, element: LabelElement) => {
+    if (activeTool === 'zoom-rect') {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     e.stopPropagation();
     if (activeTool === 'data-edit') {
       onSelectElements([element.id]);
@@ -712,7 +1076,7 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Start Dragging Selected Element(s)
   const handleStartDrag = (e: React.MouseEvent, element: LabelElement) => {
-    if (activeTool === 'data-edit') {
+    if (activeTool === 'data-edit' || activeTool === 'zoom-rect') {
       return;
     }
     e.stopPropagation();
@@ -736,16 +1100,94 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
 
   // Start Resizing Handle
   const handleStartResize = (e: React.MouseEvent, handle: string, element: LabelElement) => {
+    if (activeTool === 'zoom-rect') return;
+    if (element.locked || element.allowResize === false || element.editable === false || element.isEditable === false) return;
+    e.preventDefault();
     e.stopPropagation();
+    const pointerId = (e as React.PointerEvent).pointerId;
+    gestureRef.current = { element: structuredClone(element), pointerId };
+    containerRef.current?.setPointerCapture(pointerId);
     setIsResizing(true);
     setResizeHandle(handle);
     setResizingElementId(element.id);
     setDragStartPos({ x: e.clientX, y: e.clientY });
-    setResizeInitialState({ x: element.x, y: element.y, w: element.width, h: element.height });
+
+    const isTextEl = element.type === 'text';
+    const textEl = isTextEl ? (element as TextElement) : null;
+    // Match the renderer's auto-size detection (CanvasElement) so the resize starts
+    // from the exact dimensions currently drawn on screen. Otherwise corner scaling
+    // divides by a stale width/height and the font size jumps incorrectly.
+    const isSingleLine =
+      !textEl?.textType || textEl.textType === 'single-line' || textEl?.textFormatType === 'single-line';
+    const isTextAutoSize =
+      isTextEl &&
+      !!textEl &&
+      textEl.textType !== 'arc' && textEl.textFormatType !== 'arc' &&
+      (textEl.sizingMode === 'auto-width' || (!textEl.sizingMode && textEl.autoSize !== false && isSingleLine));
+
+    let effectiveW = element.width;
+    let effectiveH = element.height;
+    let moduleColumns: number | undefined;
+    if (element.type === 'barcode') {
+      effectiveH = calculateBarcodeLayout(element as BarcodeElement).totalHeightMm;
+      try { moduleColumns = getBarcodeModuleColumns(element as BarcodeElement, { record: recordData }); } catch { moduleColumns = undefined; }
+    }
+
+    if (textEl) {
+      const isParagraph = textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph';
+      if (isTextAutoSize || effectiveW <= 0 || effectiveH <= 0) {
+        const evaluatedContent = evaluateElementData(textEl, { record: recordData });
+        const dims = measureTextObject({
+          text: typeof evaluatedContent === 'string' ? evaluatedContent : textEl.text,
+          fontFamily: textEl.fontFamily,
+          fontSize: textEl.fontSize || 12,
+          fontWeight: textEl.fontWeight,
+          fontStyle: textEl.fontStyle,
+          letterSpacing: textEl.letterSpacing,
+          lineHeight: textEl.lineHeight,
+          fontWidthScale: textEl.fontWidthScale,
+          textType: textEl.textType,
+          textFormatType: textEl.textFormatType,
+          multiline: textEl.multiline,
+          wrap: textEl.wrap || textEl.wordWrap,
+          containerWidthMm: isParagraph && textEl.width > 0 ? textEl.width : undefined,
+          borderConfig: textEl.borderConfig,
+        });
+        effectiveW = isParagraph && textEl.width > 0 ? textEl.width : dims.width;
+        effectiveH = dims.height;
+      }
+    }
+
+    setResizeInitialState({
+      elementId: element.id,
+      element: structuredClone(element),
+      x: element.x,
+      y: element.y,
+      w: Math.max(0.5, effectiveW),
+      h: Math.max(0.5, effectiveH),
+      rotation: element.rotation || 0,
+      fontSize: textEl ? (textEl.fontSize || 12) : 12,
+      fontWidthScale: textEl?.fontWidthScale || 100,
+      lineHeight: textEl?.lineHeight || 1.15,
+      letterSpacing: textEl?.letterSpacing || 0,
+      barWidth: (element as any).barWidth,
+      barHeight: (element as any).barHeight || element.height,
+      xDimensionMm: (element as any).xDimensionMm,
+      moduleColumns,
+      pointerClientX: e.clientX,
+      pointerClientY: e.clientY,
+      handle,
+      isText: isTextEl,
+      isBarcode: element.type === 'barcode',
+      isParagraph: isTextEl && (textEl?.textFormatType === 'paragraph' || textEl?.textType === 'paragraph'),
+    });
   };
 
   // Start Rotation
   const handleStartRotate = (e: React.MouseEvent, element: LabelElement) => {
+    if (activeTool === 'zoom-rect') return;
+    if (element.locked || element.allowRotate === false || element.editable === false || element.isEditable === false) return;
+    e.preventDefault();
     e.stopPropagation();
     setIsRotating(true);
     setRotatingElementId(element.id);
@@ -753,7 +1195,11 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     const elDom = document.getElementById(`canvas-el-${element.id}`);
     if (elDom) {
       const rect = elDom.getBoundingClientRect();
-      setRotateCenter({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const pointerId = (e as React.PointerEvent).pointerId;
+      gestureRef.current = { element: structuredClone(element), pointerId, originalAngle: Math.atan2(e.clientY - center.y, e.clientX - center.x) };
+      containerRef.current?.setPointerCapture(pointerId);
+      setRotateCenter(center);
     }
   };
 
@@ -879,8 +1325,12 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
     );
   }
 
-  const labelWidthPx = template.dimensions.width * scale;
-  const labelHeightPx = template.dimensions.height * scale;
+  const labelScreenSize = documentToViewport(
+    { x: template.dimensions.width, y: template.dimensions.height },
+    { zoom: viewport.zoom, panX: 0, panY: 0 },
+  );
+  const labelWidthPx = labelScreenSize.x;
+  const labelHeightPx = labelScreenSize.y;
 
   // Determine label physical shape and corner radius
   const rawShape = (template as any).shape || (template.dimensions as any)?.shape || 'rectangle';
@@ -1004,15 +1454,26 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
         <div
           ref={containerRef}
           className={`flex-1 h-full bg-[#9fbddb] relative overflow-hidden ${
-            isSpacePressed || isPanning
+            activeTool === 'zoom-rect'
+              ? 'cursor-crosshair'
+              : isSpacePressed || isPanning
               ? 'cursor-grab active:cursor-grabbing'
               : activeTool === 'data-edit'
               ? 'cursor-cell'
               : 'cursor-default'
           }`}
+          onPointerDownCapture={beginZoomRectangle}
+          onPointerMoveCapture={updateZoomRectangle}
+          onPointerUpCapture={finishZoomRectangle}
+          onPointerCancelCapture={cancelZoomRectanglePointer}
           onMouseDown={handleCanvasMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
+          onPointerMove={handleMouseMove}
+          onPointerUp={handleMouseUp}
+          onPointerCancel={cancelGesture}
+          onLostPointerCapture={(event) => {
+            cancelGesture();
+            if (zoomRectGestureRef.current?.pointerId === event.pointerId) cancelZoomRectangle();
+          }}
           onWheel={handleWheel}
           onDragOver={(e) => {
             e.preventDefault();
@@ -1122,7 +1583,21 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                   onSelect={handleElementSelect}
                   onDoubleClick={() => {
                     if (el.type === 'text') {
-                      handleStartTextEdit(el);
+                      const textEl = el as TextElement;
+                      const isRichOrMarkup =
+                        textEl.textType === 'word-processor' ||
+                        textEl.textType === 'rtf' ||
+                        textEl.textType === 'html' ||
+                        textEl.textType === 'xaml';
+                      const isSymbol = textEl.textType === 'symbol-font';
+
+                      if (isRichOrMarkup && onOpenRichTextEditor) {
+                        onOpenRichTextEditor(textEl);
+                      } else if (isSymbol && onOpenSymbolPicker) {
+                        onOpenSymbolPicker(textEl);
+                      } else {
+                        handleStartTextEdit(el);
+                      }
                     } else if (el.type === 'barcode' && onOpenBarcodeProperties) {
                       onOpenBarcodeProperties();
                     } else if (onOpenProperties) {
@@ -1133,6 +1608,21 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                   onCommitEdit={handleCommitInlineText}
                   onCancelEdit={handleCancelInlineText}
                   onDraftResize={handleDraftResize}
+                  onGrowParagraphToFit={(textElement, heightMm) => onUpdateElement(textElement.id, {
+                    height: heightMm,
+                    autoHeight: true,
+                    autoSize: false,
+                    autoFit: false,
+                    sizingMode: 'fixed-width',
+                    autoSizeConfig: {
+                      ...(textElement.autoSizeConfig || {}),
+                      enabled: false,
+                      minFontSize: textElement.autoSizeConfig?.minFontSize ?? textElement.minFontSize ?? 1,
+                      maxFontSize: textElement.autoSizeConfig?.maxFontSize ?? textElement.maxFontSize ?? 720,
+                      minWidthScale: textElement.autoSizeConfig?.minWidthScale ?? textElement.minWidthScale ?? 100,
+                      maxWidthScale: textElement.autoSizeConfig?.maxWidthScale ?? textElement.maxWidthScale ?? 100,
+                    },
+                  })}
                   scale={scale}
                   recordData={recordData}
                   onStartDrag={handleStartDrag}
@@ -1152,23 +1642,40 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
               {/* Dynamic Interactive Guidelines */}
               {viewport.showGuides &&
                 guides.map((g) => {
-                  const posPx = g.position * scale;
+                  const guidePoint = documentToViewport(
+                    { x: g.position, y: g.position },
+                    { zoom: viewport.zoom, panX: 0, panY: 0 },
+                  );
                   return g.type === 'vertical' ? (
                     <div
                       key={g.id}
                       className="absolute top-0 bottom-0 w-px bg-cyan-500 z-40 pointer-events-none"
-                      style={{ left: `${posPx}px` }}
+                      style={{ left: `${guidePoint.x}px` }}
                     />
                   ) : (
                     <div
                       key={g.id}
                       className="absolute left-0 right-0 h-px bg-cyan-500 z-40 pointer-events-none"
-                      style={{ top: `${posPx}px` }}
+                      style={{ top: `${guidePoint.y}px` }}
                     />
                   );
                 })}
             </div>
           </div>
+
+          {zoomRect && (
+            <div
+              aria-label="Zoom rectangle selection"
+              data-testid="zoom-rectangle-overlay"
+              className="absolute pointer-events-none z-50 border border-blue-700 bg-blue-500/20"
+              style={{
+                left: `${Math.min(zoomRect.start.x, zoomRect.current.x)}px`,
+                top: `${Math.min(zoomRect.start.y, zoomRect.current.y)}px`,
+                width: `${Math.abs(zoomRect.current.x - zoomRect.start.x)}px`,
+                height: `${Math.abs(zoomRect.current.y - zoomRect.start.y)}px`,
+              }}
+            />
+          )}
 
           {/* Rubberband Selection Box */}
           {isBoxSelecting && selectionBox && (
@@ -1310,21 +1817,34 @@ export const DesignerCanvas: React.FC<DesignerCanvasProps> = ({
                 className="w-full flex items-center px-3 py-1 hover:bg-[#0078d7] hover:text-white text-left cursor-pointer transition-colors"
               >
                 <Scan className="w-3.5 h-3.5 mr-2.5 shrink-0" />
+                <span>Zoom to Selection</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onZoomRectangleTool?.();
+                  setIsZoomMenuOpen(false);
+                }}
+                className="w-full flex items-center px-3 py-1 hover:bg-[#0078d7] hover:text-white text-left cursor-pointer transition-colors"
+              >
+                <Scan className="w-3.5 h-3.5 mr-2.5 shrink-0" />
                 <span>Zoom to Rectangle</span>
               </button>
 
               <div className="border-t border-slate-200 my-1 mx-1" />
 
               {/* Preset Zoom Levels */}
-              {[3200, 1600, 800, 400, 200, 100, 50].map(pct => {
+              {[3200, 1600, 800, 400, 200, 100, 50, 25].map(pct => {
                 const isCurrent = Math.round(viewport.zoom * 100) === pct;
                 return (
                   <button
                     key={pct}
                     type="button"
                     onClick={() => {
-                      centerInView(pct / 100);
-                      setIsZoomMenuOpen(false);
+                        exitFitMode();
+                        centerInView(pct / 100);
+                        setIsZoomMenuOpen(false);
                     }}
                     className={`w-full flex items-center px-3 py-1 hover:bg-[#0078d7] hover:text-white text-left cursor-pointer transition-colors ${
                       isCurrent ? 'font-bold' : ''

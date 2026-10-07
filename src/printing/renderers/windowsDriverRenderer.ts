@@ -1,6 +1,9 @@
-import { LabelTemplate, LabelElement } from '../../types';
-import { evaluateElementData } from '../../services/dataSourceEngine';
-import { generateBarcodeSVG } from '../../services/barcodeEngine';
+import { LabelTemplate, LabelElement, TextElement, BarcodeElement } from '../../types';
+import { evaluateElementData, resolveImageElementSrc, evaluateTextElementRuns, hasDataSourceFontOverrides } from '../../services/dataSourceEngine';
+import { generateBarcodeSVG, generatePureSymbolSVG, calculateBarcodeLayout, resolveBarcodeData } from '../../services/barcodeEngine';
+import { getMultiLineLayoutValue, getSingleLineLayoutValue } from '../../services/controlCharacterService';
+import { getTextElementMarkup } from '../../services/textMarkupEngine';
+import { getArcTextSvg, measureTextObject } from '../../services/textMeasurementEngine';
 
 /**
  * Generates an exact-dimension, print-ready HTML/SVG document for Windows Driver printing.
@@ -47,9 +50,9 @@ function generateSingleLabelRollHtml(
   template: LabelTemplate,
   records: Record<string, any>[]
 ): string {
-  const widthMm = template.dimensions.width;
-  const heightMm = template.dimensions.height;
-  const orientation = template.dimensions.orientation || 'portrait';
+  const widthMm = template.dimensions?.width ?? (template as any).width ?? 100;
+  const heightMm = template.dimensions?.height ?? (template as any).height ?? 100;
+  const orientation = template.dimensions?.orientation || (template as any).orientation || 'portrait';
 
   const isLandscape = orientation === 'landscape' || orientation === 'landscape-180';
   const is180 = orientation === 'portrait-180' || orientation === 'landscape-180';
@@ -313,6 +316,7 @@ function generateMultiUpSheetHtml(
     .text-content {
       width: 100%;
       word-break: break-word;
+      white-space: pre-wrap;
     }
     svg {
       display: block;
@@ -357,7 +361,36 @@ function renderLabelContentHtml(
       const x = el.x;
       const y = el.y;
       const w = el.width;
-      const h = el.height;
+      const textEl = el.type === 'text' ? el as TextElement : null;
+      const isParagraphText = !!textEl && (textEl.textType === 'paragraph' || textEl.textFormatType === 'paragraph');
+      const paragraphAutoHeight = isParagraphText && !!textEl && (textEl.autoHeight ?? textEl.autoSize === true);
+      const paragraphValue = isParagraphText && textEl
+        ? evaluateElementData(textEl, { record, currentRecordIndex: printIndex })
+        : '';
+      const paragraphRuns = isParagraphText && textEl
+        ? evaluateTextElementRuns(textEl, { record, currentRecordIndex: printIndex })
+        : undefined;
+      const h = el.type === 'barcode'
+        ? calculateBarcodeLayout(el as any).totalHeightMm
+        : paragraphAutoHeight && textEl
+          ? measureTextObject({
+            text: paragraphValue,
+            runs: paragraphRuns,
+            fontFamily: textEl.fontFamily,
+            fontSize: textEl.fontSize,
+            fontWeight: textEl.fontWeight,
+            fontStyle: textEl.fontStyle,
+            letterSpacing: textEl.letterSpacing,
+            lineHeight: textEl.lineHeight,
+            fontWidthScale: textEl.fontWidthScale || 100,
+            textType: 'paragraph',
+            textFormatType: 'paragraph',
+            multiline: true,
+            wrap: textEl.wrap !== false && textEl.wordWrap !== false,
+            containerWidthMm: textEl.width,
+            borderConfig: textEl.borderConfig,
+          }).height
+          : el.height;
       const rot = el.rotation || 0;
       const opacity = el.opacity !== undefined ? el.opacity : 1;
 
@@ -374,7 +407,69 @@ function renderLabelContentHtml(
         .join('; ');
 
       if (el.type === 'text') {
-        const textVal = evaluateElementData(el, { record, printIndex, currentRecordIndex: printIndex });
+        if (isParagraphText && textEl) {
+          const markup = getTextElementMarkup(
+            { ...textEl, height: h, autoHeight: paragraphAutoHeight || textEl.autoHeight },
+            paragraphValue,
+            paragraphRuns,
+          );
+          return `<div class="el" style="position:absolute;${style};overflow:visible">${markup}</div>`;
+        }
+        const isSingleLine = textEl.textType === 'single-line';
+        const hasOverrides = hasDataSourceFontOverrides(textEl);
+        const containerStyle = [
+          `text-align: ${textEl.textAlign || 'left'}`,
+          `line-height: ${textEl.lineHeight || 1.15}`,
+          `white-space: ${isSingleLine ? 'nowrap' : 'pre-wrap'}`,
+          `word-break: ${isSingleLine ? 'normal' : 'break-word'}`,
+        ].join('; ');
+
+        if (hasOverrides) {
+          const runs = evaluateTextElementRuns(textEl, { record, printIndex, currentRecordIndex: printIndex });
+          const spansHtml = runs
+            .map((run) => {
+              const runText = isSingleLine ? getSingleLineLayoutValue(run.value) : getMultiLineLayoutValue(run.value);
+              if (!runText) return '';
+              const s = run.style;
+              const runUnderline = s.underline;
+              const runStrikeout = s.strikeout;
+              const decor =
+                runUnderline && runStrikeout
+                  ? 'underline line-through'
+                  : runUnderline
+                  ? 'underline'
+                  : runStrikeout
+                  ? 'line-through'
+                  : 'none';
+              const color = s.whiteOnBlack ? '#ffffff' : (s.color || textEl.color || '#000000');
+              const bg = s.whiteOnBlack
+                ? 'background-color: #000000;'
+                : s.backgroundColor && s.backgroundColor !== 'transparent'
+                ? `background-color: ${s.backgroundColor};`
+                : '';
+              const spanStyle = [
+                `font-size: ${s.fontSize || textEl.fontSize || 12}pt`,
+                `font-family: ${s.fontFamily || textEl.fontFamily || 'Arial'}, sans-serif`,
+                `color: ${color}`,
+                bg,
+                s.fontWeight ? `font-weight: ${s.fontWeight}` : '',
+                s.fontStyle ? `font-style: ${s.fontStyle}` : '',
+                decor !== 'none' ? `text-decoration: ${decor}` : '',
+              ]
+                .filter(Boolean)
+                .join('; ');
+              return `<span style="${spanStyle}">${escapeHtml(runText)}</span>`;
+            })
+            .join('');
+          return `<div class="label-element" style="${style}"><div class="text-content" style="${containerStyle}">${spansHtml}</div></div>`;
+        }
+
+        const rawVal = evaluateElementData(el, { record, printIndex, currentRecordIndex: printIndex });
+        const textVal = isSingleLine ? getSingleLineLayoutValue(rawVal) : getMultiLineLayoutValue(rawVal);
+        if (textEl.textType === 'arc' || textEl.textFormatType === 'arc') {
+          return `<div class="label-element" style="${style}">${getArcTextSvg(textEl, getSingleLineLayoutValue(textVal))}</div>`;
+        }
+        const markup = getTextElementMarkup(textEl, rawVal);
         const textStyle = [
           `font-size: ${el.fontSize}pt`,
           `font-family: ${el.fontFamily || 'Arial'}, sans-serif`,
@@ -384,17 +479,43 @@ function renderLabelContentHtml(
           el.textDecoration ? `text-decoration: ${el.textDecoration}` : '',
           el.textAlign ? `text-align: ${el.textAlign}` : 'text-align: left',
           `line-height: ${el.lineHeight || 1.15}`,
+          `white-space: ${isSingleLine ? 'nowrap' : 'pre-wrap'}`,
         ]
           .filter(Boolean)
           .join('; ');
 
-        return `<div class="label-element" style="${style}"><div class="text-content" style="${textStyle}">${escapeHtml(textVal)}</div></div>`;
+        return `<div class="label-element" style="${style}"><div class="text-content" style="${textStyle}">${markup ?? escapeHtml(textVal)}</div></div>`;
       }
 
       if (el.type === 'barcode') {
         try {
-          const svg = generateBarcodeSVG(el, { record: record as any, printIndex, currentRecordIndex: printIndex });
-          return `<div class="label-element" style="${style}">${svg}</div>`;
+          const barcodeEl = el as BarcodeElement;
+          const resolved = resolveBarcodeData(barcodeEl, { record: record as any, printIndex, currentRecordIndex: printIndex });
+          const layout = calculateBarcodeLayout(barcodeEl, resolved);
+          const pureSvg = generatePureSymbolSVG(barcodeEl, { record: record as any, printIndex, currentRecordIndex: printIndex });
+          const isTop = resolved.placement === 'top';
+          const fontName = (barcodeEl.humanReadableFont || barcodeEl.humanReadable?.fontFamily || barcodeEl.fontFamily || 'Arial').trim();
+          const styleRaw =
+            barcodeEl.humanReadableFontStyle ||
+            (barcodeEl.fontStyle === 'italic' && barcodeEl.fontWeight === 'bold'
+              ? 'bold-italic'
+              : barcodeEl.fontStyle === 'italic'
+                ? 'italic'
+                : barcodeEl.fontWeight === 'bold'
+                  ? 'bold'
+                  : 'regular');
+          const isBold = styleRaw === 'bold' || styleRaw === 'bold-italic' || barcodeEl.fontWeight === 'bold';
+          const isItalic = styleRaw === 'italic' || styleRaw === 'bold-italic' || barcodeEl.fontStyle === 'italic';
+          const isUnderline = Boolean(barcodeEl.humanReadableUnderline || barcodeEl.underline);
+          const textColor = barcodeEl.humanReadableColor || barcodeEl.color || '#000000';
+          const textAlign = resolved.alignment === 'left' ? 'left' : resolved.alignment === 'right' ? 'right' : 'center';
+
+          const symbolRegionHtml = `<div class="barcode-symbol-region" style="width: 100%; height: ${layout.symbolHeightMm}mm; display: flex; align-items: center; justify-content: center;">${pureSvg}</div>`;
+          const hrtRegionHtml = resolved.includeText && resolved.displayTextLines.length > 0
+            ? `<div class="barcode-hrt-region" style="width: 100%; margin-top: ${isTop ? 0 : layout.hrtGapMm}mm; margin-bottom: ${isTop ? layout.hrtGapMm : 0}mm; font-size: ${layout.fontSizePt}pt; font-family: ${escapeHtml(fontName)}, Arial, sans-serif; font-weight: ${isBold ? 'bold' : 'normal'}; font-style: ${isItalic ? 'italic' : 'normal'}; text-decoration: ${isUnderline ? 'underline' : 'none'}; text-align: ${textAlign}; color: ${textColor}; line-height: 1.25; white-space: nowrap;">${resolved.displayTextLines.map(escapeHtml).join('<br/>')}</div>`
+            : '';
+
+          return `<div class="label-element barcode-object" style="${style}; display: flex; flex-direction: column; justify-content: flex-start;">${isTop ? hrtRegionHtml + symbolRegionHtml : symbolRegionHtml + hrtRegionHtml}</div>`;
         } catch {
           return `<div class="label-element" style="${style}; font-size: 8pt; color: red;">Barcode Error</div>`;
         }
@@ -419,8 +540,12 @@ function renderLabelContentHtml(
         }
       }
 
-      if (el.type === 'image' && el.src) {
-        return `<div class="label-element" style="${style}"><img src="${el.src}" style="width: 100%; height: 100%; object-fit: contain;" /></div>`;
+      if (el.type === 'image') {
+        const imgSrc = resolveImageElementSrc(el, { record, printIndex, currentRecordIndex: printIndex });
+        if (imgSrc) {
+          return `<div class="label-element" style="${style}"><img src="${imgSrc}" style="width: 100%; height: 100%; object-fit: ${el.objectFit || 'contain'};" /></div>`;
+        }
+        return '';
       }
 
       return '';

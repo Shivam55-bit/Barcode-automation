@@ -28,7 +28,20 @@ export function createBackendApp(): express.Application {
 
   // CORS Middleware
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (process.env.BARCODEFLOW_DESKTOP === '1') {
+      const expectedHosts = [`127.0.0.1:${req.socket.localPort}`, `localhost:${req.socket.localPort}`, `[::1]:${req.socket.localPort}`];
+      if (!expectedHosts.includes(req.headers.host || '') || req.headers['sec-fetch-site'] === 'cross-site' ||
+          (origin && origin !== `${req.protocol}://${req.headers.host}`)) {
+        return res.status(403).json({ error: 'Foreign origins and hosts cannot access the private desktop service.' });
+      }
+      if (origin) {
+        res.header('Access-Control-Allow-Origin', origin);
+        res.vary('Origin');
+      }
+    } else {
+      res.header('Access-Control-Allow-Origin', '*');
+    }
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
     if (req.method === 'OPTIONS') {

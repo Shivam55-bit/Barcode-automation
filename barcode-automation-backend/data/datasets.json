@@ -1,5 +1,55 @@
 [
   {
+    "id": "ds-link-1790142592138",
+    "name": "Product Master",
+    "description": "Permanently linked Excel workbook: test.xlsx [Sheet1]",
+    "sourceType": "excel",
+    "mode": "link",
+    "filePath": "C:\\Data\\test.xlsx",
+    "fileName": "test.xlsx",
+    "sheetName": "Sheet1",
+    "availableSheets": [
+      "Sheet1"
+    ],
+    "headerRow": 1,
+    "status": "FILE_CHANGED",
+    "statusMessage": "Excel file has been modified on disk.",
+    "columns": [
+      "SL No.",
+      "Colors",
+      "Barcode",
+      "QR Code"
+    ],
+    "records": [
+      {
+        "SL No.": "1",
+        "Colors": "Blue",
+        "Barcode": "3052021",
+        "QR Code": "52021"
+      },
+      {
+        "SL No.": "2",
+        "Colors": "Yellow",
+        "Barcode": "3052022",
+        "QR Code": "52022"
+      },
+      {
+        "SL No.": "3",
+        "Colors": "Green",
+        "Barcode": "3052023",
+        "QR Code": "52023"
+      }
+    ],
+    "recordCount": 3,
+    "createdAt": "2026-09-23T05:49:52.138Z",
+    "updatedAt": "2026-09-23T05:49:56.739Z",
+    "lastModified": "2026-09-23T05:49:52.251Z",
+    "lastRefreshed": "2026-09-23T05:49:52.260Z",
+    "createdBy": "Acceptance Test Runner",
+    "autoRefresh": true,
+    "mapping": {}
+  },
+  {
     "id": "ds-link-1788626729148",
     "name": "Product Master Data",
     "description": "Permanently linked Excel workbook: barcode_colors_data.xlsx [Barcode Data]",

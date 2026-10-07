@@ -1,3 +1,4 @@
+import { getDataDirectory } from '../runtimePaths';
 /**
  * Industrial Folder Watcher & Automated Print Daemon
  * Monitors hot directories for incoming CSV, JSON, and XML files,
@@ -40,7 +41,7 @@ export class FolderWatcherService {
   private recentJobs: WatcherStatus['recentJobs'] = [];
 
   private constructor() {
-    this.watchDir = path.resolve(process.cwd(), 'barcode-automation-backend/data/watch_folders');
+    this.watchDir = path.join(getDataDirectory(), 'watch_folders');
     this.incomingDir = path.join(this.watchDir, 'incoming');
     this.processedDir = path.join(this.watchDir, 'processed');
     this.errorDir = path.join(this.watchDir, 'error');

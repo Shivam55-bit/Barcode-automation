@@ -1,6 +1,8 @@
 import { LabelTemplate, LabelElement, SheetGridConfig } from '../types';
 import { PrinterModel } from '../printer/types';
 import { evaluateElementData, EvaluationContext } from './dataSourceEngine';
+import { executeDocumentEventScript } from './vbscriptEngine';
+import { resolveCalculatedFields } from './calculatedFieldEngine';
 
 export interface PrintPlanItem {
   itemIndex: number; // 0-based global label index
@@ -125,6 +127,20 @@ export function createPrintPlan(
     : [{}];
 
   const recordsToProcess = isTestPrint ? [sourceRecords[0] || {}] : sourceRecords;
+  const eventScripts: Record<string, string> = (template as any).eventScripts || {};
+
+  // Lifecycle Event: OnStartJob
+  if (eventScripts.OnStartJob) {
+    try {
+      executeDocumentEventScript('OnStartJob', eventScripts, {
+        printerName: printer?.name,
+        jobId: options.jobId,
+        totalRecords: recordsToProcess.length,
+      });
+    } catch (err) {
+      console.warn('[EventScript] OnStartJob warning:', err);
+    }
+  }
 
   // 2. Expand copies and quantities per record
   const expandedItems: {
@@ -134,10 +150,46 @@ export function createPrintPlan(
     record: Record<string, any>;
   }[] = [];
 
-  recordsToProcess.forEach((rec, rIdx) => {
+  recordsToProcess.forEach((rawRec, rIdx) => {
+    let rec = { ...rawRec };
+
+    // Calculated fields (spec 17/40): ensure derived fields exist at print time so
+    // printed output matches canvas exactly. Idempotent when already resolved.
+    if (template.calculatedFields && template.calculatedFields.length > 0) {
+      rec = resolveCalculatedFields(rec, template.calculatedFields, {
+        namedSources: template.namedDataSources
+          ? Object.fromEntries(template.namedDataSources.map((n) => [n.name, n.defaultValue]))
+          : undefined,
+        system: { currentRecordIndex: rIdx, totalRecords: recordsToProcess.length, printerName: printer?.name, jobId: options.jobId },
+      });
+    }
+
+    // Lifecycle Event: OnNewRecord (mutates or enhances row before formatting)
+    if (eventScripts.OnNewRecord) {
+      try {
+        const evRes = executeDocumentEventScript('OnNewRecord', eventScripts, {
+          record: rec,
+          currentRecordIndex: rIdx,
+          totalRecords: recordsToProcess.length,
+          printerName: printer?.name,
+          jobId: options.jobId,
+        });
+        if (evRes.record) {
+          rec = { ...rec, ...evRes.record };
+        }
+      } catch (err) {
+        console.warn('[EventScript] OnNewRecord warning:', err);
+      }
+    }
+
     let copiesForThisRow = isTestPrint ? 1 : Math.max(1, copies);
     if (!isTestPrint && quantitySource === 'database_field' && selectedQtyColumn) {
-      const parsed = parseInt(String(rec[selectedQtyColumn] ?? '1'), 10);
+      let rawVal = rec[selectedQtyColumn];
+      if (rawVal === undefined) {
+        const foundKey = Object.keys(rec).find((k) => k.toLowerCase() === selectedQtyColumn.toLowerCase());
+        if (foundKey) rawVal = rec[foundKey];
+      }
+      const parsed = parseInt(String(rawVal ?? '1'), 10);
       copiesForThisRow = (isNaN(parsed) || parsed <= 0 ? 1 : parsed) * Math.max(1, copies);
     }
 
@@ -295,6 +347,15 @@ export function createPrintPlan(
     evalCtx.pageNumber = pageIndex + 1;
     evalCtx.copyNumber = expItem.copyIndex;
     evalCtx.printIndex = globalIdx;
+
+    // Lifecycle Event: OnPrePrint (per label copy execution)
+    if (eventScripts.OnPrePrint) {
+      try {
+        executeDocumentEventScript('OnPrePrint', eventScripts, evalCtx);
+      } catch (err) {
+        console.warn('[EventScript] OnPrePrint warning:', err);
+      }
+    }
 
     // Evaluate template elements
     const evaluatedValues: Record<string, string> = {};

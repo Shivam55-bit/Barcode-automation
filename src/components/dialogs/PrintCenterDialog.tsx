@@ -30,6 +30,7 @@ import { exportLabelsToPDF } from '../../services/pdfExportService';
 import { EnterprisePrintSpooler } from '../../services/printSpoolerService';
 import { advanceTemplateSerialState, AtomicSerialReservationService, computeNextSerialValue } from '../../services/serializationEngine';
 import { evaluateElementData } from '../../services/dataSourceEngine';
+import { validatePrintDataBarcodes, PrintValidationResult } from '../../services/printValidationService';
 import {
   RecordSelectionModal,
   formatIndicesToRangeString,
@@ -60,6 +61,8 @@ export interface PrintCenterDialogProps {
   onJobSubmitted: (job: PrintJob) => void;
   activeRecordIndex?: number;
   selectedRecordIndices?: number[];
+  /** Authoritative filtered + sorted visible record set (spec 40: print == canvas) */
+  visibleRecords?: Record<string, any>[];
   onOpenDatabaseSetup?: () => void;
   onUpdateTemplate?: (template: LabelTemplate) => void;
   onOpenPrintPreview?: (planOptions: {
@@ -83,6 +86,7 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
   onJobSubmitted,
   activeRecordIndex = 0,
   selectedRecordIndices: propSelectedRecordIndices = [],
+  visibleRecords,
   onOpenDatabaseSetup,
   onUpdateTemplate,
   onOpenPrintPreview,
@@ -152,6 +156,10 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
   const [isTestingPrint, setIsTestingPrint] = useState(false);
   const [isCancellingJobs, setIsCancellingJobs] = useState(false);
 
+  // Pre-print barcode data validation (spec 28)
+  const [barcodePreflight, setBarcodePreflight] = useState<PrintValidationResult | null>(null);
+  const barcodeOverrideRef = useRef<boolean>(false);
+
   // Generated code modal state
   const [generatedCodePayload, setGeneratedCodePayload] = useState<{
     isOpen: boolean;
@@ -171,10 +179,18 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isOfflinePrinterModalOpen, setIsOfflinePrinterModalOpen] = useState(false);
 
-  // Database Connection Toggle
-  const hasDatabaseConnection = Boolean(
-    template.databaseConnection?.records && template.databaseConnection.records.length > 0
+  // Authoritative dataset = filtered + sorted visible records when supplied,
+  // otherwise fall back to the raw connection records (spec 40 consistency).
+  const datasetRecords = useMemo(
+    () =>
+      visibleRecords && visibleRecords.length > 0
+        ? visibleRecords
+        : template.databaseConnection?.records,
+    [visibleRecords, template.databaseConnection?.records]
   );
+
+  // Database Connection Toggle
+  const hasDatabaseConnection = Boolean(datasetRecords && datasetRecords.length > 0);
   const [useDatabaseConnection, setUseDatabaseConnection] = useState<boolean>(hasDatabaseConnection);
 
   // Record Selection Mode
@@ -182,16 +198,16 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
   const [selectedIndices, setSelectedIndices] = useState<number[]>(
     propSelectedRecordIndices.length > 0
       ? propSelectedRecordIndices
-      : template.databaseConnection?.records
-      ? template.databaseConnection.records.map((_, i) => i)
+      : datasetRecords
+      ? datasetRecords.map((_, i) => i)
       : [0]
   );
   const [rangeString, setRangeString] = useState<string>(() =>
     formatIndicesToRangeString(
       propSelectedRecordIndices.length > 0
         ? propSelectedRecordIndices
-        : template.databaseConnection?.records
-        ? template.databaseConnection.records.map((_, i) => i)
+        : datasetRecords
+        ? datasetRecords.map((_, i) => i)
         : [0]
     )
   );
@@ -555,28 +571,28 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
   const isSpeedSupported = isThermalProtocol || Boolean(selectedPrinter?.capabilities?.speedControl);
   const isDarknessSupported = isThermalProtocol || Boolean(selectedPrinter?.capabilities?.darknessControl);
 
-  // Raw dataset records
+  // Authoritative dataset records (filtered + sorted when available)
   const allRecords = useMemo(() => {
-    if (useDatabaseConnection && template.databaseConnection?.records && template.databaseConnection.records.length > 0) {
-      return template.databaseConnection.records;
+    if (useDatabaseConnection && datasetRecords && datasetRecords.length > 0) {
+      return datasetRecords;
     }
     return [recordData];
-  }, [useDatabaseConnection, template.databaseConnection, recordData]);
+  }, [useDatabaseConnection, datasetRecords, recordData]);
 
   // Detected fields
   const availableColumns = useMemo(() => {
     if (template.databaseConnection?.fields && template.databaseConnection.fields.length > 0) {
       return template.databaseConnection.fields;
     }
-    if (allRecords.length > 0) {
-      return Object.keys(allRecords[0]);
+    if (allRecords.length > 0 && allRecords[0]) {
+      return Object.keys(allRecords[0] || {});
     }
     return [];
   }, [template.databaseConnection, allRecords]);
 
   // Determine subset of records to print
   const recordsToPrint = useMemo(() => {
-    if (!useDatabaseConnection || (allRecords.length === 1 && !template.databaseConnection?.records?.length)) {
+    if (!useDatabaseConnection || (allRecords.length === 1 && !(datasetRecords && datasetRecords.length))) {
       return [recordData];
     }
 
@@ -894,6 +910,16 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
   // Main Print Execution (Sections 1, 2, 3, 5, 14, 18, 19, 23)
   const handleExecutePrint = async () => {
     if (!validationResult.isValid || isSubmitting) return;
+
+    // Pre-print barcode data validation (spec 28): never silently print invalid data.
+    if (!barcodeOverrideRef.current) {
+      const preflight = validatePrintDataBarcodes(template, recordsToPrint);
+      if (!preflight.valid) {
+        setBarcodePreflight(preflight);
+        return;
+      }
+    }
+    barcodeOverrideRef.current = false;
 
     // Check offline physical printer (Section 14)
     if (isSelectedPhysicalOffline) {
@@ -2132,6 +2158,71 @@ export const PrintCenterDialog: React.FC<PrintCenterDialogProps> = ({
       </div>
 
       {/* Sub Modals */}
+      {barcodePreflight && !barcodePreflight.valid && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 font-sans">
+          <div className="w-[560px] max-w-full bg-white rounded-lg shadow-2xl border border-red-300 flex flex-col overflow-hidden">
+            <div className="bg-gradient-to-r from-red-600 to-red-500 px-4 py-2.5 flex items-center gap-2 text-white">
+              <AlertTriangle className="w-4 h-4" />
+              <span className="font-semibold text-sm">Invalid Barcode Data Detected</span>
+            </div>
+            <div className="p-4 space-y-3 text-slate-800 text-xs max-h-[50vh] overflow-y-auto">
+              <p className="text-slate-600">
+                {barcodePreflight.issues.length} record(s) contain barcode values that are invalid for
+                their symbology. Printing these will produce unscannable labels.
+              </p>
+              <div className="border border-slate-200 rounded-lg overflow-hidden">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-100 text-slate-600">
+                    <tr>
+                      <th className="py-1.5 px-2 font-semibold">Record</th>
+                      <th className="py-1.5 px-2 font-semibold">Object</th>
+                      <th className="py-1.5 px-2 font-semibold">Value</th>
+                      <th className="py-1.5 px-2 font-semibold">Problem</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {barcodePreflight.issues.slice(0, 12).map((iss, i) => (
+                      <tr key={i}>
+                        <td className="py-1.5 px-2 font-mono">#{iss.recordNumber}</td>
+                        <td className="py-1.5 px-2">{iss.elementName}<span className="text-slate-400"> ({iss.symbology})</span></td>
+                        <td className="py-1.5 px-2 font-mono text-red-700 max-w-[140px] truncate" title={iss.value}>{iss.value || '(empty)'}</td>
+                        <td className="py-1.5 px-2 text-slate-600">{iss.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {barcodePreflight.issues.length > 12 && (
+                <p className="text-slate-500 italic">…and {barcodePreflight.issues.length - 12} more.</p>
+              )}
+              {barcodePreflight.truncated && (
+                <p className="text-amber-600">Note: scan limited to the first records for performance.</p>
+              )}
+            </div>
+            <div className="border-t border-slate-200 bg-slate-50 px-4 py-2.5 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setBarcodePreflight(null)}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg"
+              >
+                Fix Data
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  barcodeOverrideRef.current = true;
+                  setBarcodePreflight(null);
+                  handleExecutePrint();
+                }}
+                className="px-4 py-1.5 text-xs font-medium text-red-700 bg-white border border-red-300 hover:bg-red-50 rounded-lg"
+              >
+                Print Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <RecordSelectionModal
         isOpen={isRecordSelectionModalOpen}
         onClose={() => setIsRecordSelectionModalOpen(false)}

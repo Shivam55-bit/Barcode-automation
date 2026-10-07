@@ -11,10 +11,14 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react';
-import { LabelTemplate, LabelElement, BarcodeElement } from '../../types';
+import { LabelTemplate, LabelElement, BarcodeElement, TextElement } from '../../types';
 import { PrinterModel } from '../../printer/types';
 import { PrintPlan, PrintPlanPage, PrintPlanItem, createPrintPlan } from '../../services/printPlanService';
-import { renderBarcodeToCanvas } from '../../services/barcodeEngine';
+import { renderBarcodeToCanvas, calculateBarcodeLayout, resolveBarcodeData } from '../../services/barcodeEngine';
+import { resolveImageElementSrc, evaluateTextElementRuns, hasDataSourceFontOverrides } from '../../services/dataSourceEngine';
+import { getMultiLineLayoutValue, getSingleLineLayoutValue } from '../../services/controlCharacterService';
+import { getTextElementMarkup } from '../../services/textMarkupEngine';
+import { getArcTextSvg, measureTextObject } from '../../services/textMeasurementEngine';
 
 interface PrintPreviewWorkspaceProps {
   template: LabelTemplate;
@@ -436,6 +440,7 @@ export const PrintPreviewWorkspace: React.FC<PrintPreviewWorkspaceProps> = ({
                       }}
                     >
                       {template.elements.map((el) => {
+                        if (!el.visible || el.printable === false) return null;
                         const evaluatedVal = item.evaluatedValues[el.id] !== undefined
                           ? item.evaluatedValues[el.id]
                           : (el as any).value || (el as any).content || '';
@@ -568,7 +573,33 @@ const PreviewElementSlot: React.FC<{
   const leftPx = element.x * MM_TO_PX;
   const topPx = element.y * MM_TO_PX;
   const widthPx = element.width * MM_TO_PX;
-  const heightPx = element.height * MM_TO_PX;
+  const textElement = element.type === 'text' ? element as TextElement : null;
+  const isParagraph = !!textElement && (textElement.textType === 'paragraph' || textElement.textFormatType === 'paragraph');
+  const autoHeightEnabled = isParagraph && !!textElement && (textElement.autoHeight ?? textElement.autoSize === true);
+  const paragraphRuns = isParagraph && textElement ? evaluateTextElementRuns(textElement, { record }) : undefined;
+  const paragraphDimensions = isParagraph && textElement
+    ? measureTextObject({
+      text: evaluatedValue,
+      runs: paragraphRuns,
+      fontFamily: textElement.fontFamily,
+      fontSize: textElement.fontSize,
+      fontWeight: textElement.fontWeight,
+      fontStyle: textElement.fontStyle,
+      letterSpacing: textElement.letterSpacing,
+      lineHeight: textElement.lineHeight,
+      fontWidthScale: textElement.fontWidthScale || 100,
+      textType: 'paragraph',
+      textFormatType: 'paragraph',
+      multiline: true,
+      wrap: textElement.wrap !== false && textElement.wordWrap !== false,
+      containerWidthMm: textElement.width,
+      borderConfig: textElement.borderConfig,
+    })
+    : null;
+  const effectiveHeightMm = element.type === 'barcode'
+    ? calculateBarcodeLayout(element as BarcodeElement).totalHeightMm
+    : autoHeightEnabled && paragraphDimensions ? paragraphDimensions.height : element.height;
+  const heightPx = effectiveHeightMm * MM_TO_PX;
 
   const rotation = element.rotation || 0;
   const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -584,7 +615,7 @@ const PreviewElementSlot: React.FC<{
           value: evaluatedValue || elAny.value || elAny.dataSources?.[0]?.value || '00001',
         },
         2.5,
-        { record }
+        { record, symbolOnly: true }
       ).catch((err) => {
         console.warn('[Preview] Barcode render fallback:', err);
       });
@@ -593,6 +624,7 @@ const PreviewElementSlot: React.FC<{
 
   return (
     <div
+      data-preview-element-id={element.id}
       className="absolute overflow-hidden"
       style={{
         left: `${leftPx}px`,
@@ -603,51 +635,199 @@ const PreviewElementSlot: React.FC<{
         transformOrigin: 'center center',
       }}
     >
-      {elType === 'barcode' ? (
-        <div
-          className={`w-full h-full flex items-center justify-center ${
-            elAny.borderType === 'ellipse' ? 'rounded-full' : ''
-          }`}
-          style={{
-            backgroundColor:
-              elAny.borderFillColor && elAny.borderFillColor !== 'None'
-                ? elAny.borderFillColor
-                : 'transparent',
-            borderWidth: elAny.borderType && elAny.borderType !== 'none' ? `${elAny.borderThickness || 1}px` : '0px',
-            borderColor: elAny.borderColor || '#000000',
-            borderStyle: elAny.borderDashStyle || 'solid',
-            borderRadius: elAny.borderType === 'ellipse' ? '50%' : elAny.cornerRadius ? `${elAny.cornerRadius * MM_TO_PX}px` : undefined,
-            padding: elAny.borderPadding !== undefined ? `${elAny.borderPadding * MM_TO_PX}px` : '2px',
-          }}
-        >
-          <canvas
-            ref={barcodeCanvasRef}
-            className="w-full h-full object-contain pointer-events-none"
-          />
-        </div>
-      ) : elType === 'text' ? (
-        <div
-          className="w-full h-full flex items-center justify-start"
-          style={{
-            fontFamily: elAny.fontFamily || 'Arial, sans-serif',
-            fontSize: `${(elAny.fontSize || 12) * 1.333}px`,
-            fontWeight: elAny.fontWeight || 'normal',
-            fontStyle: elAny.fontStyle || 'normal',
-            textAlign: elAny.textAlign || 'left',
-            color: elAny.color || '#000000',
-            lineHeight: 1.15,
-            wordBreak: 'break-word',
-            justifyContent:
-              elAny.textAlign === 'center'
-                ? 'center'
-                : elAny.textAlign === 'right'
-                ? 'flex-end'
-                : 'flex-start',
-          }}
-        >
-          {evaluatedValue}
-        </div>
-      ) : elType === 'shape' || elType === 'rectangle' ? (
+      {elType === 'barcode' ? (() => {
+        const barcodeEl = element as BarcodeElement;
+        const layout = calculateBarcodeLayout(barcodeEl);
+        const resolved = resolveBarcodeData(barcodeEl, { record });
+        const isTop = resolved.placement === 'top';
+        const symbolHeightPx = Math.max(6, Math.round(layout.symbolHeightMm * MM_TO_PX));
+        const hrtGapPx = Math.max(1, Math.round(layout.hrtGapMm * MM_TO_PX));
+        const fontSizePx = Math.max(7, Math.round(layout.fontSizePt * (25.4 / 72) * MM_TO_PX));
+
+        const fontName = (barcodeEl.humanReadableFont || barcodeEl.humanReadable?.fontFamily || barcodeEl.fontFamily || 'Arial').trim();
+        const styleRaw =
+          barcodeEl.humanReadableFontStyle ||
+          (barcodeEl.fontStyle === 'italic' && barcodeEl.fontWeight === 'bold'
+            ? 'bold-italic'
+            : barcodeEl.fontStyle === 'italic'
+              ? 'italic'
+              : barcodeEl.fontWeight === 'bold'
+                ? 'bold'
+                : 'regular');
+        const isBold = styleRaw === 'bold' || styleRaw === 'bold-italic' || barcodeEl.fontWeight === 'bold';
+        const isItalic = styleRaw === 'italic' || styleRaw === 'bold-italic' || barcodeEl.fontStyle === 'italic';
+        const isUnderline = Boolean(barcodeEl.humanReadableUnderline || barcodeEl.underline);
+        const textColor = barcodeEl.humanReadableColor || barcodeEl.color || '#000000';
+        const textAlign = resolved.alignment === 'left' ? 'left' : resolved.alignment === 'right' ? 'right' : 'center';
+
+        const hrtRegion = resolved.includeText && resolved.displayTextLines.length > 0 ? (
+          <div
+            className="barcode-hrt-region select-none shrink-0"
+            style={{
+              width: '100%',
+              marginTop: isTop ? 0 : `${hrtGapPx}px`,
+              marginBottom: isTop ? `${hrtGapPx}px` : 0,
+              fontFamily: `"${fontName}", Arial, sans-serif`,
+              fontSize: `${fontSizePx}px`,
+              fontWeight: isBold ? 'bold' : 'normal',
+              fontStyle: isItalic ? 'italic' : 'normal',
+              textDecoration: isUnderline ? 'underline' : 'none',
+              color: textColor,
+              textAlign,
+              lineHeight: 1.25,
+              whiteSpace: 'nowrap',
+              overflow: 'visible',
+            }}
+          >
+            {resolved.displayTextLines.map((line: string, idx: number) => (
+              <div key={idx}>{line}</div>
+            ))}
+          </div>
+        ) : null;
+
+        return (
+          <div
+            className={`w-full h-full flex flex-col justify-start overflow-visible ${
+              elAny.borderType === 'ellipse' ? 'rounded-full' : ''
+            }`}
+            style={{
+              backgroundColor:
+                elAny.borderFillColor && elAny.borderFillColor !== 'None'
+                  ? elAny.borderFillColor
+                  : 'transparent',
+              borderWidth: elAny.borderType && elAny.borderType !== 'none' ? `${elAny.borderThickness || 1}px` : '0px',
+              borderColor: elAny.borderColor || '#000000',
+              borderStyle: elAny.borderDashStyle || 'solid',
+              borderRadius: elAny.borderType === 'ellipse' ? '50%' : elAny.cornerRadius ? `${elAny.cornerRadius * MM_TO_PX}px` : undefined,
+              padding: elAny.borderPadding !== undefined ? `${elAny.borderPadding * MM_TO_PX}px` : '0px',
+            }}
+          >
+            {isTop && hrtRegion}
+
+            {/* SYMBOL REGION */}
+            <div
+              className="barcode-symbol-region flex items-center justify-center shrink-0"
+              style={{
+                width: '100%',
+                height: `${symbolHeightPx}px`,
+              }}
+            >
+              <canvas
+                ref={barcodeCanvasRef}
+                style={{
+                  width: '100%',
+                  height: `${symbolHeightPx}px`,
+                  display: 'block',
+                }}
+              />
+            </div>
+
+            {!isTop && hrtRegion}
+          </div>
+        );
+      })() : elType === 'text' ? (() => {
+        const previewTextElement = element as TextElement;
+        if (previewTextElement.textType === 'arc' || previewTextElement.textFormatType === 'arc') {
+          return (
+            <div
+              className="w-full h-full overflow-hidden"
+              dangerouslySetInnerHTML={{ __html: getArcTextSvg(previewTextElement, getSingleLineLayoutValue(evaluatedValue)) }}
+            />
+          );
+        }
+        const markup = getTextElementMarkup(
+          { ...previewTextElement, height: effectiveHeightMm, autoHeight: autoHeightEnabled || previewTextElement.autoHeight },
+          evaluatedValue,
+          paragraphRuns ?? evaluateTextElementRuns(previewTextElement, { record }),
+        );
+        if (markup !== null) {
+          return (
+            <div
+              className="w-full h-full overflow-hidden"
+              style={{ fontFamily: textElement.fontFamily || 'Arial', fontSize: `${textElement.fontSize * 96 / 72}px`, fontWeight: textElement.fontWeight, fontStyle: textElement.fontStyle, color: textElement.color || '#000000', lineHeight: textElement.lineHeight || 1.25 }}
+              dangerouslySetInnerHTML={{ __html: markup }}
+            />
+          );
+        }
+        const isSingleLine = elAny.textType === 'single-line';
+        const hasOverrides = hasDataSourceFontOverrides(elAny);
+        const displayText = isSingleLine
+          ? getSingleLineLayoutValue(evaluatedValue || '')
+          : getMultiLineLayoutValue(evaluatedValue || '');
+        return (
+          <div
+            className="w-full h-full flex items-start justify-start"
+            style={{
+              fontFamily: elAny.fontFamily || 'Arial, sans-serif',
+              fontSize: `${(elAny.fontSize || 12) * 1.333}px`,
+              fontWeight: elAny.fontWeight || 'normal',
+              fontStyle: elAny.fontStyle || 'normal',
+              textAlign: elAny.textAlign || 'left',
+              color: elAny.color || '#000000',
+              lineHeight: 1.15,
+              wordBreak: 'break-word',
+              whiteSpace: isSingleLine ? 'nowrap' : 'pre-wrap',
+              justifyContent:
+                elAny.textAlign === 'center'
+                  ? 'center'
+                  : elAny.textAlign === 'right'
+                  ? 'flex-end'
+                  : 'flex-start',
+            }}
+          >
+            {hasOverrides ? (
+              evaluateTextElementRuns(elAny, { record }).map((run, idx) => {
+                const runText = isSingleLine
+                  ? getSingleLineLayoutValue(run.value)
+                  : getMultiLineLayoutValue(run.value);
+                if (!runText) return null;
+                const s = run.style;
+                const runUnderline = s.underline;
+                const runStrikeout = s.strikeout;
+                const runDecor =
+                  runUnderline && runStrikeout
+                    ? 'underline line-through'
+                    : runUnderline
+                    ? 'underline'
+                    : runStrikeout
+                    ? 'line-through'
+                    : 'none';
+                const runFontSizePx = (s.fontSize || elAny.fontSize || 12) * 1.333;
+                const runFontScale = (s.fontWidthScale || 100) / 100;
+                const runColor = s.whiteOnBlack ? '#ffffff' : (s.color || elAny.color || '#000000');
+                const runBg = s.whiteOnBlack
+                  ? '#000000'
+                  : s.backgroundColor && s.backgroundColor !== 'transparent'
+                  ? s.backgroundColor
+                  : undefined;
+
+                return (
+                  <span
+                    key={run.sourceId || idx}
+                    style={{
+                      fontFamily: s.fontFamily || elAny.fontFamily || 'Arial, sans-serif',
+                      fontSize: `${runFontSizePx}px`,
+                      fontWeight: s.fontWeight || 'normal',
+                      fontStyle: s.fontStyle || 'normal',
+                      textDecoration: runDecor,
+                      color: runColor,
+                      backgroundColor: runBg,
+                      letterSpacing: s.letterSpacing !== undefined ? `${s.letterSpacing}px` : undefined,
+                      transform: runFontScale !== 1 ? `scaleX(${runFontScale})` : undefined,
+                      display: runFontScale !== 1 ? 'inline-block' : undefined,
+                      transformOrigin: 'left center',
+                    }}
+                  >
+                    {runText}
+                  </span>
+                );
+              })
+            ) : (
+              displayText
+            )}
+          </div>
+        );
+      })() : elType === 'shape' || elType === 'rectangle' ? (
         <div
           className="w-full h-full"
           style={{
@@ -678,17 +858,24 @@ const PreviewElementSlot: React.FC<{
           }}
         />
       ) : elType === 'image' ? (
-        elAny.url || elAny.src ? (
-          <img
-            src={elAny.url || elAny.src}
-            alt=""
-            className="w-full h-full object-contain"
-          />
-        ) : (
-          <div className="w-full h-full border border-dashed border-slate-300 flex items-center justify-center text-[9px] text-slate-400">
-            [Image]
-          </div>
-        )
+        (() => {
+          const imgSrc = resolveImageElementSrc(element, { record }) || elAny.url || elAny.src;
+          return imgSrc ? (
+            <img
+              src={imgSrc}
+              alt=""
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                const fb = elAny.fallbackSrc;
+                if (fb && e.currentTarget.src !== fb) e.currentTarget.src = fb;
+              }}
+            />
+          ) : (
+            <div className="w-full h-full border border-dashed border-slate-300 flex items-center justify-center text-[9px] text-slate-400">
+              [Image]
+            </div>
+          );
+        })()
       ) : (
         <div className="w-full h-full border border-slate-200 text-[10px] p-0.5 truncate">
           {evaluatedValue}

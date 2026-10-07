@@ -1,8 +1,10 @@
 import { LabelTemplate } from '../../types';
 import { mmToDots } from '../../printer/dpiService';
 import { evaluateElementData } from '../../services/dataSourceEngine';
+import { resolveBarcodeData } from '../../services/barcodeEngine';
 import { isObjectCompletelyOutOfBounds } from '../../services/labelGeometry';
 import { resolveObjectPrintMethod, getEffectiveObjectPrintMethodSettings } from '../../services/objectPrintMethodService';
+import { getMultiLineLayoutValue, getSingleLineLayoutValue } from '../../services/controlCharacterService';
 
 export interface ZplRenderOptions {
   dpi?: number;
@@ -69,64 +71,114 @@ export function renderZPL(
       const zplOrientation = el.rotation === 90 ? 'R' : el.rotation === 180 ? 'I' : el.rotation === 270 ? 'B' : 'N';
 
       if (el.type === 'text') {
-        const textVal = evaluateElementData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const rawVal = evaluateElementData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const isSingleLine = (el as any).textType === 'single-line';
+        const isMulti = !isSingleLine && (el.multiline || (el as any).textType === 'multi-line' || (el as any).textType === 'paragraph' || el.width > 20);
+        const textVal = isSingleLine ? getSingleLineLayoutValue(rawVal) : getMultiLineLayoutValue(rawVal);
         const fontHeight = Math.max(12, Math.round(el.fontSize * (dpi / 72)));
         const fontWidth = Math.round(fontHeight * 0.85);
 
         lines.push(`^FO${x},${y}`);
         lines.push(`^A0${zplOrientation},${fontHeight},${fontWidth}`);
-        if (el.multiline || el.width > 20) {
+        if (isMulti) {
           const align = el.textAlign === 'center' ? 'C' : el.textAlign === 'right' ? 'R' : 'L';
-          lines.push(`^FB${w},5,0,${align},0`);
+          lines.push(`^FB${w},10,0,${align},0`);
         }
-        lines.push(`^FD${escapeZPL(textVal)}^FS`);
+        lines.push(`^FD${escapeZPL(textVal, isMulti)}^FS`);
       } else if (el.type === 'barcode') {
-        const barVal = evaluateElementData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const resolved = resolveBarcodeData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const { encodedValue, displayTextLines, includeText, placement, alignment, verticalOffsetMm, horizontalOffsetMm } = resolved;
         const barHeight = mmToDots(el.barHeight || el.height, dpi);
-        const printText = el.includeText !== false ? 'Y' : 'N';
         const symbology = el.symbology || (el as any).barcodeType || 'code128';
 
-        lines.push(`^FO${x},${y}`);
+        // Check if custom readable text formatting requires discrete ZPL text rendering
+        const hasCustomReadable =
+          includeText &&
+          (placement === 'top' ||
+            verticalOffsetMm !== 0.8 ||
+            horizontalOffsetMm !== 0 ||
+            displayTextLines.length > 1 ||
+            resolved.humanReadableValue !== encodedValue ||
+            el.humanReadableFont ||
+            el.humanReadableFontSize);
+
+        const printTextNative = includeText && !hasCustomReadable ? 'Y' : 'N';
+
+        // Set module width (X dimension in dots) and wide/narrow ratio
+        const moduleDots = Math.max(1, Math.round((el.xDimensionMm || 0.38) * (dpi / 25.4)));
+        const wideRatio = el.ratio ? Math.max(2.0, Math.min(3.0, Number(el.ratio))) : 2.5;
+        lines.push(`^BY${moduleDots},${wideRatio.toFixed(1)},${barHeight}`);
+
+        // If human readable text is at the top, offset barcode bars downwards
+        const textH = hasCustomReadable ? Math.round((el.fontSize || 10) * (dpi / 72) * 1.25) : 0;
+        const barOffsetY = placement === 'top' && hasCustomReadable ? y + textH + mmToDots(verticalOffsetMm, dpi) : y;
+
+        lines.push(`^FO${x},${barOffsetY}`);
 
         switch (symbology) {
           case 'code128':
           case 'gs1-128':
-            lines.push(`^BC${zplOrientation},${barHeight},${printText},N,N,A`);
-            lines.push(`^FD${escapeZPL(barVal)}^FS`);
+            lines.push(`^BC${zplOrientation},${barHeight},${printTextNative},N,N,A`);
+            lines.push(`^FD${escapeZPL(encodedValue)}^FS`);
             break;
 
           case 'code39':
-            lines.push(`^B3${zplOrientation},N,${barHeight},${printText},N`);
-            lines.push(`^FD${escapeZPL(barVal)}^FS`);
+            lines.push(`^B3${zplOrientation},N,${barHeight},${printTextNative},N`);
+            lines.push(`^FD${escapeZPL(encodedValue)}^FS`);
             break;
 
           case 'ean13':
-            lines.push(`^BE${zplOrientation},${barHeight},${printText},N`);
-            lines.push(`^FD${escapeZPL(barVal)}^FS`);
+            lines.push(`^BE${zplOrientation},${barHeight},${printTextNative},N`);
+            lines.push(`^FD${escapeZPL(encodedValue)}^FS`);
             break;
 
           case 'upca':
-            lines.push(`^BU${zplOrientation},${barHeight},${printText},N,Y`);
-            lines.push(`^FD${escapeZPL(barVal)}^FS`);
+            lines.push(`^BU${zplOrientation},${barHeight},${printTextNative},N,Y`);
+            lines.push(`^FD${escapeZPL(encodedValue)}^FS`);
             break;
 
           case 'qr':
           case 'gs1-qr':
             const qrMag = Math.max(2, Math.min(10, Math.round(w / 25)));
             lines.push(`^BQN,2,${qrMag},Q,7`);
-            lines.push(`^FDQA,${escapeZPL(barVal)}^FS`);
+            lines.push(`^FDQA,${escapeZPL(encodedValue)}^FS`);
             break;
 
           case 'datamatrix':
           case 'gs1-datamatrix':
             lines.push(`^BXN,${Math.max(3, Math.round(w / 20))},200,,,,`);
-            lines.push(`^FD${escapeZPL(barVal)}^FS`);
+            lines.push(`^FD${escapeZPL(encodedValue)}^FS`);
             break;
 
           default:
-            lines.push(`^BC${zplOrientation},${barHeight},${printText},N,N,A`);
-            lines.push(`^FD${escapeZPL(barVal)}^FS`);
+            lines.push(`^BC${zplOrientation},${barHeight},${printTextNative},N,N,A`);
+            lines.push(`^FD${escapeZPL(encodedValue)}^FS`);
             break;
+        }
+
+        // Discrete Human-Readable Text rendering for exact BarTender placement/transforms
+        if (hasCustomReadable && displayTextLines.length > 0) {
+          const fontPt = el.humanReadableFontSize || el.fontSize || 10;
+          const fontH = Math.max(10, Math.round(fontPt * (dpi / 72)));
+          const fontW = Math.round(fontH * 0.82);
+          const vOffsetDots = mmToDots(verticalOffsetMm, dpi);
+          const hOffsetDots = mmToDots(horizontalOffsetMm, dpi);
+
+          displayTextLines.forEach((lineText, lIdx) => {
+            let lineY = y;
+            if (placement === 'top') {
+              lineY = y + lIdx * fontH;
+            } else {
+              lineY = y + barHeight + vOffsetDots + lIdx * fontH;
+            }
+
+            const lineX = x + hOffsetDots;
+            lines.push(`^FO${lineX},${lineY}`);
+            lines.push(`^A0${zplOrientation},${fontH},${fontW}`);
+            const zAlign = alignment === 'left' ? 'L' : alignment === 'right' ? 'R' : 'C';
+            lines.push(`^FB${w},1,0,${zAlign},0`);
+            lines.push(`^FD${escapeZPL(lineText)}^FS`);
+          });
         }
       } else if (el.type === 'shape') {
         const borderDots = Math.max(1, mmToDots(el.strokeWidth || 0.5, dpi));
@@ -155,7 +207,11 @@ export function renderZPL(
   return zplJobs.join('\n\n');
 }
 
-function escapeZPL(str: string): string {
+function escapeZPL(str: string, isFB = false): string {
   if (!str) return '';
-  return str.replace(/\\/g, '\\\\').replace(/\^/g, '\\^').replace(/~/g, '\\~');
+  let res = str.replace(/\\/g, '\\\\').replace(/\^/g, '\\^').replace(/~/g, '\\~');
+  if (isFB) {
+    res = res.replace(/\r\n|\r|\n/g, '\\&');
+  }
+  return res;
 }

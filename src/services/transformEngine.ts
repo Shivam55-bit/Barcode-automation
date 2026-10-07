@@ -1,5 +1,6 @@
 import { TransformRule, TransformConfig, DataTypeFormatConfig } from '../types';
 import { evaluateSerializedValue } from './serializationEngine';
+import { executeVBScript, isVBScriptCode, createRecordProxy, parseVBDate } from './vbscriptEngine';
 
 /**
  * Formats a value according to DataType configuration (Number, Date, Currency, etc.)
@@ -7,6 +8,12 @@ import { evaluateSerializedValue } from './serializationEngine';
 export function applyDataTypeFormatting(input: any, config?: DataTypeFormatConfig): string {
   if (input === null || input === undefined) return '';
   if (!config) return String(input);
+
+  // If data type is 'text' or not specified, preserve raw string verbatim without trimming!
+  // Trimming destroys meaningful control characters such as \r, \n, \t.
+  if (!config.dataType || config.dataType === 'text') {
+    return String(input);
+  }
 
   const rawStr = String(input).trim();
 
@@ -51,8 +58,8 @@ export function applyDataTypeFormatting(input: any, config?: DataTypeFormatConfi
     case 'date':
     case 'time':
     case 'datetime': {
-      const d = new Date(rawStr);
-      if (isNaN(d.getTime())) return rawStr;
+      const d = parseVBDate(rawStr);
+      if (!d || isNaN(d.getTime())) return rawStr;
       const mask = config.dateFormat || (config.dataType === 'time' ? 'HH:mm:ss' : 'YYYY-MM-DD');
       
       const yyyy = d.getFullYear().toString();
@@ -163,16 +170,16 @@ export function executeEnterpriseTransformPipeline(
 
   if (!config) return str;
 
-  // 1. Data Type & Formatting
-  if (config.dataTypeFormat) {
+  // 1. Data Type & Formatting (skip if text type to avoid destroying control characters)
+  if (config.dataTypeFormat && config.dataTypeFormat.dataType !== 'text') {
     str = applyDataTypeFormatting(str, config.dataTypeFormat);
   }
 
-  // 2. Suppression
+  // 2. Suppression (do NOT use str.trim() which destroys control characters like \r)
   if (config.suppression && config.suppression.type !== 'never') {
     const sType = config.suppression.type;
     if (sType === 'always') return '';
-    if (sType === 'empty' && str.trim() === '') return '';
+    if (sType === 'empty' && str === '') return '';
     if (sType === 'equals' && str === (config.suppression.value ?? '')) return '';
     if (sType === 'not_equals' && str !== (config.suppression.value ?? '')) return '';
   }
@@ -263,23 +270,44 @@ export function executeEnterpriseTransformPipeline(
   // 8. Script Execution
   if (config.script?.code) {
     try {
-      const scope = {
-        value: str,
-        input: str,
-        record: context?.record || {},
-        Date,
-        Math,
-        String,
-        Number,
-      };
       const code = config.script.code;
-      const fn = new Function(...Object.keys(scope), `return (function() { ${code.includes('return') ? code : 'return ' + code} })()`);
-      const scriptRes = fn(...Object.values(scope));
-      if (scriptRes !== undefined && scriptRes !== null) {
-        str = String(scriptRes);
+      const isVB = config.script.language === 'vbscript' || (!config.script.language && isVBScriptCode(code));
+      if (isVB) {
+        const vbRes = executeVBScript(code, {
+          value: str,
+          input: str,
+          record: context?.record || {},
+        });
+        if (vbRes.success) {
+          str = vbRes.value;
+        } else if (vbRes.error) {
+          str = `[Script Error: ${vbRes.error}]`;
+        }
+      } else {
+        const recordProxy = createRecordProxy(context?.record || {});
+        const scope = {
+          value: str,
+          input: str,
+          Value: str,
+          Input: str,
+          record: recordProxy,
+          Record: recordProxy,
+          field: recordProxy,
+          Field: recordProxy,
+          Date,
+          Math,
+          String,
+          Number,
+        };
+        const fn = new Function(...Object.keys(scope), `return (function() { ${code.includes('return') ? code : 'return ' + code} })()`);
+        const scriptRes = fn(...Object.values(scope));
+        if (scriptRes !== undefined && scriptRes !== null) {
+          str = String(scriptRes);
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Transform Script evaluation warning:', err);
+      str = `[Script Error: ${err.message}]`;
     }
   }
 
@@ -301,10 +329,10 @@ export function executeEnterpriseTransformPipeline(
 /**
  * Backward compatible single rule executor
  */
-export function applyTransformRule(input: string, rule: TransformRule): string {
+export function applyTransformRule(input: string, rule: TransformRule, context?: any): string {
   if (input === undefined || input === null) return '';
   let str = String(input);
-  const { params } = rule;
+  const params = rule.params || (rule as any);
 
   switch (rule.type) {
     case 'truncate':
@@ -389,6 +417,45 @@ export function applyTransformRule(input: string, rule: TransformRule): string {
       return String(res);
     }
 
+    case 'script': {
+      const code = (params as any).scriptCode || (params as any).code || (rule as any).scriptCode || '';
+      if (!code) return str;
+      const lang = (params as any).scriptLanguage || (params as any).language || (rule as any).scriptLanguage;
+      const isVB = lang === 'vbscript' || (!lang && isVBScriptCode(code));
+      if (isVB) {
+        const res = executeVBScript(code, {
+          value: str,
+          input: str,
+          record: context?.record || {},
+        });
+        return res.success ? res.value : `[Script Error: ${res.error || 'Execution failed'}]`;
+      }
+      try {
+        const recordProxy = createRecordProxy(context?.record || {});
+        const scope = {
+          value: str,
+          input: str,
+          Value: str,
+          Input: str,
+          record: recordProxy,
+          Record: recordProxy,
+          field: recordProxy,
+          Field: recordProxy,
+          Date,
+          Math,
+          String,
+          Number,
+        };
+        const fn = new Function(...Object.keys(scope), `
+          ${code.includes('return ') ? code : (code.trim().startsWith('Value =') || code.trim().startsWith('value =')) ? code + '; return Value;' : 'return ' + code}
+        `);
+        const out = fn(...Object.values(scope));
+        return out !== undefined && out !== null ? String(out) : str;
+      } catch (err: any) {
+        return `[Script Error: ${err.message}]`;
+      }
+    }
+
     default:
       return str;
   }
@@ -397,7 +464,7 @@ export function applyTransformRule(input: string, rule: TransformRule): string {
 /**
  * Runs a pipeline of multiple transform rules sequentially
  */
-export function applyTransformPipeline(input: string, rules?: TransformRule[]): string {
+export function applyTransformPipeline(input: string, rules?: TransformRule[], context?: any): string {
   if (!rules || !rules.length) return input;
-  return rules.reduce((acc, rule) => applyTransformRule(acc, rule), input);
+  return rules.reduce((acc, rule) => applyTransformRule(acc, rule, context), input);
 }

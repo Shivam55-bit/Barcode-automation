@@ -10,7 +10,8 @@ import {
   DpiOption,
   UnitType,
 } from '../../types';
-import { SYMBOLOGY_CATALOG, validateBarcodeValue } from '../../services/barcodeEngine';
+import { SYMBOLOGY_CATALOG, validateBarcodeValue, calculateBarcodeLayout, getBarcodeSymbolHeight } from '../../services/barcodeEngine';
+import { isMultiLineTextElement, isTextFitToBoxEnabled } from '../../services/textMeasurementEngine';
 import {
   Sliders,
   Maximize,
@@ -63,6 +64,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
   const selectedElement = template.elements.find(
     (el) => el.id === selectedElementIds[0]
   );
+  const selectedTextElement = selectedElement?.type === 'text' ? selectedElement as TextElement : null;
+  const hasParagraphAutoHeight = !!selectedTextElement && isMultiLineTextElement(selectedTextElement);
+  const textFitEnabled = !!selectedTextElement && isTextFitToBoxEnabled(selectedTextElement);
+  const autoHeightEnabled = !textFitEnabled && (selectedTextElement?.autoHeight ?? selectedTextElement?.autoSize === true);
 
   const updateProp = (updates: Partial<LabelElement>) => {
     if (selectedElement) {
@@ -504,7 +509,7 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     <label className="text-[10px] text-slate-500 font-medium">
                       Width (mm)
                     </label>
-                    {selectedElement.type === 'text' && (selectedElement as TextElement).autoSize !== false && (
+                    {selectedTextElement && !hasParagraphAutoHeight && selectedTextElement.autoSize !== false && (
                       <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded">Auto</span>
                     )}
                   </div>
@@ -513,7 +518,11 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     step="0.5"
                     disabled={selectedElement.isEditable === false}
                     value={selectedElement.width}
-                    onChange={(e) => updateProp({ width: Number(e.target.value), autoSize: false, autoFit: false } as any)}
+                    onChange={(e) => updateProp({
+                      width: Number(e.target.value),
+                      ...(hasParagraphAutoHeight ? { sizingMode: 'fixed-width' } : { autoSize: false }),
+                      autoFit: false,
+                    } as any)}
                     className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
@@ -522,8 +531,10 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     <label className="text-[10px] text-slate-500 font-medium">
                       Height (mm)
                     </label>
-                    {selectedElement.type === 'text' && (selectedElement as TextElement).autoSize !== false && (
-                      <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded">Auto</span>
+                    {selectedTextElement && (hasParagraphAutoHeight ? autoHeightEnabled : selectedTextElement.autoSize !== false) && (
+                      <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded">
+                        {hasParagraphAutoHeight ? 'Auto Height' : 'Auto'}
+                      </span>
                     )}
                   </div>
                   <input
@@ -531,7 +542,12 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     step="0.5"
                     disabled={selectedElement.isEditable === false}
                     value={selectedElement.height}
-                    onChange={(e) => updateProp({ height: Number(e.target.value), autoSize: false, autoFit: false } as any)}
+                    onChange={(e) => updateProp({
+                      height: Number(e.target.value),
+                      autoSize: false,
+                      autoHeight: hasParagraphAutoHeight ? false : selectedTextElement?.autoHeight,
+                      autoFit: false,
+                    } as any)}
                     className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none disabled:bg-slate-100 disabled:text-slate-400"
                   />
                 </div>
@@ -588,24 +604,49 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     <label className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-emerald-950 select-none">
                       <input
                         type="checkbox"
-                        checked={(selectedElement as TextElement).autoSize !== false}
+                        checked={hasParagraphAutoHeight ? !!autoHeightEnabled : textFitEnabled}
                         onChange={(e) => {
                           const isAuto = e.target.checked;
-                          updateProp({
-                            autoSize: isAuto,
-                            autoFit: false,
-                            autoSizeConfig: {
-                              ...((selectedElement as TextElement).autoSizeConfig || {}),
-                              enabled: isAuto,
-                            },
-                          } as any);
+                          if (hasParagraphAutoHeight) {
+                            updateProp({
+                              autoHeight: isAuto,
+                              autoSize: false,
+                              autoFit: false,
+                              sizingMode: 'fixed-width',
+                              autoSizeConfig: {
+                                ...(selectedTextElement!.autoSizeConfig || {}),
+                                enabled: false,
+                                minFontSize: selectedTextElement!.autoSizeConfig?.minFontSize ?? selectedTextElement!.minFontSize ?? 1,
+                                maxFontSize: selectedTextElement!.autoSizeConfig?.maxFontSize ?? selectedTextElement!.maxFontSize ?? 720,
+                                minWidthScale: selectedTextElement!.autoSizeConfig?.minWidthScale ?? selectedTextElement!.minWidthScale ?? 100,
+                                maxWidthScale: selectedTextElement!.autoSizeConfig?.maxWidthScale ?? selectedTextElement!.maxWidthScale ?? 100,
+                              },
+                            });
+                          } else {
+                            updateProp({
+                              sizingMode: isAuto ? 'fit-to-box' : 'scale-text',
+                              autoSize: false,
+                              autoHeight: false,
+                              autoFit: isAuto,
+                              autoSizeConfig: {
+                                ...(selectedTextElement!.autoSizeConfig || {}),
+                                enabled: isAuto,
+                                minFontSize: selectedTextElement!.autoSizeConfig?.minFontSize ?? selectedTextElement!.minFontSize ?? 1,
+                                maxFontSize: selectedTextElement!.autoSizeConfig?.maxFontSize ?? selectedTextElement!.maxFontSize ?? 720,
+                                minWidthScale: selectedTextElement!.autoSizeConfig?.minWidthScale ?? selectedTextElement!.minWidthScale ?? 100,
+                                maxWidthScale: selectedTextElement!.autoSizeConfig?.maxWidthScale ?? selectedTextElement!.maxWidthScale ?? 100,
+                              },
+                            });
+                          }
                         }}
                         className="rounded text-emerald-600 focus:ring-0 w-3.5 h-3.5 accent-[#16a34a]"
                       />
-                      <span>Auto Size (Fit Bounding Box)</span>
+                      <span>{hasParagraphAutoHeight ? 'Auto Height (Reflow Content)' : 'Auto Size (Fit Bounding Box)'}</span>
                     </label>
                     <span className="text-[10px] text-emerald-700 font-semibold">
-                      {(selectedElement as TextElement).autoSize !== false ? 'Dynamic' : 'Fixed Box'}
+                      {hasParagraphAutoHeight
+                        ? autoHeightEnabled ? 'Dynamic Height' : 'Fixed Height'
+                        : textFitEnabled ? 'Fitted to Box' : 'Fixed Box'}
                     </span>
                   </div>
 
@@ -615,15 +656,19 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                     </label>
                     <select
                       value={(selectedElement as TextElement).textType || 'single-line'}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const isParagraph = e.target.value === 'multi-line' || e.target.value === 'paragraph';
                         updateProp({
                           textType: e.target.value as any,
-                          textFormatType: e.target.value === 'paragraph' ? 'paragraph' : 'single-line',
-                          multiline: e.target.value === 'multi-line' || e.target.value === 'word-processor' || e.target.value === 'paragraph',
-                          wrap: e.target.value === 'paragraph',
-                          wordWrap: e.target.value === 'paragraph',
-                        })
-                      }
+                          textFormatType: isParagraph ? 'paragraph' : e.target.value === 'arc' ? 'arc' : 'single-line',
+                          multiline: isParagraph || e.target.value === 'word-processor',
+                          wrap: isParagraph,
+                          wordWrap: isParagraph,
+                          autoHeight: isParagraph
+                            ? selectedTextElement?.autoHeight ?? true
+                            : false,
+                        });
+                      }}
                       className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs outline-none font-medium text-slate-800"
                     >
                       <optgroup label="Text Objects">
@@ -702,11 +747,11 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                       </label>
                       <input
                         type="number"
-                        min="4"
+                        min="1"
                         max="720"
                         step="0.5"
                         value={(selectedElement as TextElement).fontSize}
-                        onChange={(e) => updateProp({ fontSize: Number(e.target.value) })}
+                        onChange={(e) => updateProp({ fontSize: Math.max(1, Number(e.target.value)) })}
                         className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
                       />
                     </div>
@@ -903,7 +948,12 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                       <input
                         type="number"
                         value={(selectedElement as BarcodeElement).barHeight || 15}
-                        onChange={(e) => updateProp({ barHeight: Number(e.target.value) })}
+                        onChange={(e) => {
+                          const newBarH = Number(e.target.value);
+                          const bEl = selectedElement as BarcodeElement;
+                          const layout = calculateBarcodeLayout({ ...bEl, barHeight: newBarH });
+                          updateProp({ barHeight: newBarH, height: Math.max(newBarH, layout.totalHeightMm) });
+                        }}
                         className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
                       />
                     </div>
@@ -914,7 +964,12 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                       <input
                         type="checkbox"
                         checked={(selectedElement as BarcodeElement).includeText}
-                        onChange={(e) => updateProp({ includeText: e.target.checked })}
+                        onChange={(e) => {
+                          const nextInc = e.target.checked;
+                          const bEl = selectedElement as BarcodeElement;
+                          const layout = calculateBarcodeLayout({ ...bEl, includeText: nextInc });
+                          updateProp({ includeText: nextInc, height: Math.max(bEl.barHeight || 15, layout.totalHeightMm) });
+                        }}
                         className="rounded text-blue-600"
                       />
                       <span>Human Readable Text</span>
@@ -930,6 +985,145 @@ export const RightDockPanel: React.FC<RightDockPanelProps> = ({
                       <span>Quiet Zone</span>
                     </label>
                   </div>
+
+                  {/* Human Readable Font & Style Controls */}
+                  {(selectedElement as BarcodeElement).includeText !== false && (
+                    <div className="pt-2 border-t border-slate-200 space-y-2">
+                      <div className="text-[11px] font-semibold text-slate-700">
+                        Human-Readable Font & Styling
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-slate-500 font-medium block mb-0.5">
+                            Font Family
+                          </label>
+                          <select
+                            value={(selectedElement as BarcodeElement).humanReadableFont || (selectedElement as any).fontFamily || 'Arial'}
+                            onChange={(e) => updateProp({ humanReadableFont: e.target.value, fontFamily: e.target.value } as any)}
+                            className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs outline-none"
+                          >
+                            <option value="Arial">Arial</option>
+                            <option value="Segoe UI">Segoe UI</option>
+                            <option value="Times New Roman">Times New Roman</option>
+                            <option value="Courier New">Courier New</option>
+                            <option value="Consolas">Consolas</option>
+                            <option value="Roboto">Roboto</option>
+                            <option value="Verdana">Verdana</option>
+                            <option value="Tahoma">Tahoma</option>
+                            <option value="Impact">Impact</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] text-slate-500 font-medium block mb-0.5">
+                            Font Size (pt)
+                          </label>
+                          <input
+                            type="number"
+                            min="6"
+                            max="72"
+                            value={(selectedElement as BarcodeElement).humanReadableFontSize || (selectedElement as any).fontSize || 12}
+                            onChange={(e) => {
+                              const newSize = Number(e.target.value);
+                              const bEl = selectedElement as BarcodeElement;
+                              const persistentBarH = getBarcodeSymbolHeight(bEl);
+                              const layout = calculateBarcodeLayout({
+                                ...bEl,
+                                barHeight: persistentBarH,
+                                humanReadableFontSize: newSize,
+                                fontSize: newSize,
+                              });
+                              updateProp({
+                                humanReadableFontSize: newSize,
+                                fontSize: newSize,
+                                barHeight: persistentBarH,
+                                symbol: {
+                                  ...(bEl?.symbol || {}),
+                                  barHeight: persistentBarH,
+                                  moduleWidth: bEl?.symbol?.moduleWidth || bEl?.barWidth || 1.5,
+                                },
+                                height: layout.totalHeightMm,
+                                humanReadable: {
+                                  ...(bEl.humanReadable || {}),
+                                  fontSize: newSize,
+                                  enabled: bEl.includeText !== false,
+                                },
+                              } as any);
+                            }}
+                            className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-xs font-mono outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bEl = selectedElement as BarcodeElement;
+                              const isB = bEl.humanReadableFontStyle === 'bold' || bEl.humanReadableFontStyle === 'bold-italic' || (bEl as any).fontWeight === 'bold';
+                              const isI = bEl.humanReadableFontStyle === 'italic' || bEl.humanReadableFontStyle === 'bold-italic' || (bEl as any).fontStyle === 'italic';
+                              const nextStyle = isB ? (isI ? 'italic' : 'regular') : (isI ? 'bold-italic' : 'bold');
+                              updateProp({ humanReadableFontStyle: nextStyle, fontWeight: isB ? 'normal' : 'bold' } as any);
+                            }}
+                            className={`w-7 h-6 flex items-center justify-center font-bold text-xs rounded border cursor-pointer transition-colors ${
+                              (selectedElement as BarcodeElement).humanReadableFontStyle === 'bold' || (selectedElement as BarcodeElement).humanReadableFontStyle === 'bold-italic' || (selectedElement as any).fontWeight === 'bold'
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                            }`}
+                            title="Bold"
+                          >
+                            B
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bEl = selectedElement as BarcodeElement;
+                              const isB = bEl.humanReadableFontStyle === 'bold' || bEl.humanReadableFontStyle === 'bold-italic' || (bEl as any).fontWeight === 'bold';
+                              const isI = bEl.humanReadableFontStyle === 'italic' || bEl.humanReadableFontStyle === 'bold-italic' || (bEl as any).fontStyle === 'italic';
+                              const nextStyle = isI ? (isB ? 'bold' : 'regular') : (isB ? 'bold-italic' : 'italic');
+                              updateProp({ humanReadableFontStyle: nextStyle, fontStyle: isI ? 'normal' : 'italic' } as any);
+                            }}
+                            className={`w-7 h-6 flex items-center justify-center italic text-xs rounded border cursor-pointer transition-colors ${
+                              (selectedElement as BarcodeElement).humanReadableFontStyle === 'italic' || (selectedElement as BarcodeElement).humanReadableFontStyle === 'bold-italic' || (selectedElement as any).fontStyle === 'italic'
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                            }`}
+                            title="Italic"
+                          >
+                            I
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const bEl = selectedElement as BarcodeElement;
+                              const isU = !!bEl.humanReadableUnderline || (bEl as any).textDecoration === 'underline';
+                              updateProp({ humanReadableUnderline: !isU, textDecoration: isU ? 'none' : 'underline' } as any);
+                            }}
+                            className={`w-7 h-6 flex items-center justify-center underline text-xs rounded border cursor-pointer transition-colors ${
+                              !!(selectedElement as BarcodeElement).humanReadableUnderline || (selectedElement as any).textDecoration === 'underline'
+                                ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                            }`}
+                            title="Underline"
+                          >
+                            U
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-slate-500 font-medium">Color</label>
+                          <input
+                            type="color"
+                            value={(selectedElement as BarcodeElement).humanReadableColor || (selectedElement as any).color || '#000000'}
+                            onChange={(e) => updateProp({ humanReadableColor: e.target.value, color: e.target.value } as any)}
+                            className="w-6 h-6 p-0 border border-slate-300 rounded cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </Section>
             )}

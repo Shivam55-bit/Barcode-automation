@@ -10,13 +10,22 @@
   "scripts": {
     "dev": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && node dist/server.cjs",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "electron:build": "npm run build && esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/main.js && esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/preload.js && node -e \"require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "electron:build": "npm run build && esbuild electron/main.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/main.js && esbuild electron/preload.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist-electron/preload.js && node -e \"require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({type:'commonjs'}))\" && tsx scripts/release_verification.ts manifest",
     "electron:dev": "npm run electron:build && electron dist-electron/main.js",
     "pack": "npm run electron:build && electron-builder",
     "pack:unsigned": "npm run electron:build && electron-builder --config electron-builder.unsigned.json",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist dist-electron server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "check:fast": "tsx scripts/release_verification.ts fast",
+    "test:regression": "tsx scripts/release_verification.ts regression",
+    "test:rendering": "tsx scripts/release_verification.ts rendering",
+    "inventory:features": "tsx scripts/release_verification.ts inventory",
+    "samples:generate": "tsx scripts/release_samples.ts",
+    "test:desktop": "tsx scripts/desktop_smoke.ts built --designer",
+    "test:packaged": "tsx scripts/desktop_smoke.ts packaged --designer",
+    "test:installed": "tsx scripts/desktop_smoke.ts installed --designer",
+    "release:gate": "tsx scripts/release_verification.ts gate"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -28,6 +37,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "fflate": "^0.8.3",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -38,17 +48,26 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
+    "@playwright/test": "^1.63.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "@zxing/library": "^0.23.0",
     "autoprefixer": "^10.4.21",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
+    "pdf-lib": "^1.17.1",
+    "pngjs": "^7.0.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "vitest": "^5.0.3",
+    "zxing-wasm": "^3.1.4"
   }
 }

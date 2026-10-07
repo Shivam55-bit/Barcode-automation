@@ -10,13 +10,16 @@ import {
   getCharacterName,
   getUnicodeHex,
   parseUnicodeInput,
+  COMMON_UNICODE_NAMES,
 } from '../../services/symbolService';
+import { controlCharacterToToken } from '../../services/controlCharacterService';
 
 export interface SpecialCharacterModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onInsert: (char: string, size?: string) => void;
+  onInsert: (char: string, size?: string, controlInfo?: ControlCharacterInfo) => boolean | void;
   currentFont?: string;
+  defaultTab?: 'symbols' | 'controls';
 }
 
 export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
@@ -24,8 +27,9 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
   onClose,
   onInsert,
   currentFont = 'Arial',
+  defaultTab = 'symbols',
 }) => {
-  const [activeTab, setActiveTab] = useState<'symbols' | 'controls'>('symbols');
+  const [activeTab, setActiveTab] = useState<'symbols' | 'controls'>(defaultTab);
   const [selectedFont, setSelectedFont] = useState<string>(currentFont);
   const [selectedSubsetId, setSelectedSubsetId] = useState<string>('basic_latin');
   const [selectedChar, setSelectedChar] = useState<string>('©');
@@ -36,12 +40,14 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
     CONTROL_CHARACTERS.find((c) => c.abbr === 'GS') || CONTROL_CHARACTERS[0]
   );
   const [controlSearch, setControlSearch] = useState<string>('');
+  const [symbolSearch, setSymbolSearch] = useState<string>('');
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
   // Initialize on modal open
   useEffect(() => {
     if (isOpen) {
+      setActiveTab(defaultTab);
       setRecentSymbols(getRecentSymbols());
       if (currentFont && AVAILABLE_FONTS.includes(currentFont)) {
         setSelectedFont(currentFont);
@@ -49,8 +55,11 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
       // default selection
       setSelectedChar('©');
       setUnicodeHexInput(getUnicodeHex('©'));
+      if (!selectedControl) {
+        setSelectedControl(CONTROL_CHARACTERS.find((c) => c.abbr === 'CR') || CONTROL_CHARACTERS[0]);
+      }
     }
-  }, [isOpen, currentFont]);
+  }, [isOpen, currentFont, defaultTab]);
 
   // Current subset definition
   const currentSubset = useMemo(() => {
@@ -70,17 +79,54 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
     return chars;
   }, [currentSubset]);
 
+  // Filtered symbols by search
+  const filteredSymbolCharacters = useMemo(() => {
+    if (!symbolSearch.trim()) return subsetCharacters;
+    const q = symbolSearch.toLowerCase().trim();
+    const cleanHex = q.replace(/^u\+/i, '').replace(/^0x/i, '');
+
+    // Single character exact match (e.g. user pasted '©' or '₹')
+    if ([...q].length === 1 && !/^[a-z0-9]$/i.test(q)) {
+      return [q];
+    }
+
+    const matchedChars: string[] = [];
+    for (const sub of UNICODE_SUBSETS) {
+      for (let code = sub.start; code <= sub.end; code++) {
+        const hex = code.toString(16).toLowerCase();
+        const hexPadded = hex.padStart(4, '0');
+        const name = (COMMON_UNICODE_NAMES[code] || '').toLowerCase();
+        if (
+          name.includes(q) ||
+          hex === cleanHex ||
+          hexPadded === cleanHex ||
+          `u+${hexPadded}`.includes(q)
+        ) {
+          try {
+            matchedChars.push(String.fromCodePoint(code));
+          } catch {}
+        }
+      }
+    }
+    return matchedChars.length > 0 ? matchedChars : subsetCharacters;
+  }, [symbolSearch, subsetCharacters]);
+
   // Filtered control characters
   const filteredControls = useMemo(() => {
     if (!controlSearch.trim()) return CONTROL_CHARACTERS;
     const q = controlSearch.toLowerCase().trim();
+    const cleanHex = q.replace(/^0x/i, '');
     return CONTROL_CHARACTERS.filter(
       (c) =>
         c.abbr.toLowerCase().includes(q) ||
         c.name.toLowerCase().includes(q) ||
+        c.code.toString() === q ||
         c.code.toString().includes(q) ||
-        c.hex.toLowerCase().includes(q) ||
-        (c.description && c.description.toLowerCase().includes(q))
+        c.hex.toLowerCase() === cleanHex ||
+        c.hex.toLowerCase().includes(cleanHex) ||
+        `0x${c.hex.toLowerCase()}`.includes(q) ||
+        (c.description && c.description.toLowerCase().includes(q)) ||
+        (c.barcodeUsage && c.barcodeUsage.toLowerCase().includes(q))
     );
   }, [controlSearch]);
 
@@ -112,13 +158,16 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
   const handleInsert = () => {
     if (activeTab === 'symbols') {
       if (selectedChar) {
-        onInsert(selectedChar, selectedSize);
+        if (onInsert(selectedChar, selectedSize) === false) return;
         const updated = addRecentSymbol(selectedChar);
         setRecentSymbols(updated);
       }
     } else {
       if (selectedControl) {
-        onInsert(selectedControl.char, selectedSize);
+        const visibleToken = controlCharacterToToken(selectedControl.char);
+        if (onInsert(selectedControl.char, 'Auto', selectedControl) === false) return;
+        const updated = addRecentSymbol(visibleToken);
+        setRecentSymbols(updated);
       }
     }
   };
@@ -126,14 +175,50 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
   // Double click insert
   const handleDoubleClickChar = (char: string) => {
     handleSelectChar(char);
-    onInsert(char, selectedSize);
+    if (onInsert(char, selectedSize) === false) return;
     const updated = addRecentSymbol(char);
     setRecentSymbols(updated);
   };
 
   const handleDoubleClickControl = (ctrl: ControlCharacterInfo) => {
     setSelectedControl(ctrl);
-    onInsert(ctrl.char, selectedSize);
+    const visibleToken = controlCharacterToToken(ctrl.char);
+    if (onInsert(ctrl.char, 'Auto', ctrl) === false) return;
+    const updated = addRecentSymbol(visibleToken);
+    setRecentSymbols(updated);
+  };
+
+  const handleSelectRecent = (item: string) => {
+    if (item.startsWith('«') || item.startsWith('<')) {
+      const match = CONTROL_CHARACTERS.find(
+        (c) => controlCharacterToToken(c.char) === item || `<${c.abbr}>` === item || c.abbr === item
+      );
+      if (match) setSelectedControl(match);
+      setActiveTab('controls');
+    } else {
+      setSelectedChar(item);
+      setUnicodeHexInput(getUnicodeHex(item));
+      setActiveTab('symbols');
+    }
+  };
+
+  const handleDoubleClickRecent = (item: string) => {
+    if (item.startsWith('«') || item.startsWith('<')) {
+      const match = CONTROL_CHARACTERS.find(
+        (c) => controlCharacterToToken(c.char) === item || `<${c.abbr}>` === item || c.abbr === item
+      );
+      if (match) setSelectedControl(match);
+      const token = match ? controlCharacterToToken(match.char) : item;
+      if (!match || onInsert(match.char, 'Auto', match) === false) return;
+      const updated = addRecentSymbol(token);
+      setRecentSymbols(updated);
+    } else {
+      setSelectedChar(item);
+      setUnicodeHexInput(getUnicodeHex(item));
+      if (onInsert(item, selectedSize) === false) return;
+      const updated = addRecentSymbol(item);
+      setRecentSymbols(updated);
+    }
   };
 
   // Keyboard navigation for grid
@@ -143,28 +228,38 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
       return;
     }
     if (e.key === 'Enter') {
+      e.preventDefault();
       handleInsert();
       return;
     }
 
-    if (activeTab === 'symbols' && subsetCharacters.length > 0) {
-      const currentIndex = subsetCharacters.indexOf(selectedChar);
+    if (activeTab === 'controls' && filteredControls.length && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault();
+      const index = Math.max(0, filteredControls.findIndex(control => control.code === selectedControl.code));
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? filteredControls.length - 1
+        : Math.max(0, Math.min(filteredControls.length - 1, index + (e.key === 'ArrowDown' ? 1 : -1)));
+      setSelectedControl(filteredControls[next]);
+      return;
+    }
+
+    if (activeTab === 'symbols' && filteredSymbolCharacters.length > 0) {
+      const currentIndex = filteredSymbolCharacters.indexOf(selectedChar);
       const cols = 16;
       let nextIndex = currentIndex;
 
       if (e.key === 'ArrowRight') {
-        nextIndex = Math.min(subsetCharacters.length - 1, currentIndex + 1);
+        nextIndex = Math.min(filteredSymbolCharacters.length - 1, currentIndex + 1);
       } else if (e.key === 'ArrowLeft') {
         nextIndex = Math.max(0, currentIndex - 1);
       } else if (e.key === 'ArrowDown') {
-        nextIndex = Math.min(subsetCharacters.length - 1, currentIndex + cols);
+        nextIndex = Math.min(filteredSymbolCharacters.length - 1, currentIndex + cols);
       } else if (e.key === 'ArrowUp') {
         nextIndex = Math.max(0, currentIndex - cols);
       }
 
       if (nextIndex !== currentIndex && nextIndex >= 0) {
         e.preventDefault();
-        handleSelectChar(subsetCharacters[nextIndex]);
+        handleSelectChar(filteredSymbolCharacters[nextIndex]);
       }
     }
   };
@@ -254,14 +349,26 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
               </div>
             </div>
 
+            {/* Symbols Search Bar */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search symbols by name (e.g. copyright, euro, rupee, degree) or character..."
+                value={symbolSearch}
+                onChange={(e) => setSymbolSearch(e.target.value)}
+                className="w-full bg-white border border-[#94a3b8] rounded pl-8 pr-2.5 py-1 text-[11.5px] text-slate-800 outline-none focus:border-[#0078d7]"
+              />
+            </div>
+
             {/* Unicode Character Grid */}
             <div
               ref={gridContainerRef}
-              className="border border-[#707070] bg-white h-[230px] overflow-y-scroll p-1 shadow-inner focus:outline-none"
+              className="border border-[#707070] bg-white h-[200px] overflow-y-scroll p-1 shadow-inner focus:outline-none"
               tabIndex={0}
             >
               <div className="grid grid-cols-16 gap-[1px] bg-[#d0d0d0] border border-[#d0d0d0]">
-                {subsetCharacters.map((char, idx) => {
+                {filteredSymbolCharacters.map((char, idx) => {
                   const isSelected = selectedChar === char;
                   return (
                     <button
@@ -285,7 +392,7 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
             </div>
 
             {/* Selected Character Information Banner */}
-            <div className="flex items-center justify-between px-1 text-[11.5px] border-b border-slate-200 pb-2">
+            <div className="flex items-center justify-between px-1 text-[11.5px] border-b border-slate-200 pb-1">
               <div className="flex items-center gap-2 truncate pr-2">
                 <span className="font-semibold text-slate-800 truncate">
                   {getCharacterName(selectedChar)}
@@ -300,32 +407,6 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
                   onChange={handleHexInputChange}
                   className="w-16 bg-white border border-[#94a3b8] rounded px-1.5 py-0.5 text-center font-mono font-bold text-[11.5px] text-slate-900 focus:outline-[#0078d7]"
                 />
-              </div>
-            </div>
-
-            {/* Recently Used Characters Strip */}
-            <div className="space-y-1">
-              <label className="text-[11px] font-semibold text-slate-700 block">Recently Used Characters:</label>
-              <div className="flex items-center gap-[2px] overflow-x-auto border border-[#94a3b8] bg-[#f8fafc] p-1 rounded-xs">
-                {recentSymbols.slice(0, 22).map((sym, idx) => {
-                  const isSelected = selectedChar === sym;
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleSelectChar(sym)}
-                      onDoubleClick={() => handleDoubleClickChar(sym)}
-                      title={`${sym} (U+${getUnicodeHex(sym)}) - ${getCharacterName(sym)}`}
-                      className={`min-w-[24px] h-6 flex items-center justify-center text-[12.5px] font-sans border rounded-2xs cursor-pointer ${
-                        isSelected
-                          ? 'bg-[#0078d7] text-white border-[#005a9e] font-bold'
-                          : 'bg-white hover:bg-[#e0eeff] text-slate-800 border-[#cbd5e1]'
-                      }`}
-                    >
-                      {sym}
-                    </button>
-                  );
-                })}
               </div>
             </div>
           </div>
@@ -349,7 +430,7 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
             </div>
 
             {/* Control Characters Table / List */}
-            <div className="border border-[#707070] bg-white h-[255px] overflow-y-auto shadow-inner">
+            <div className="border border-[#707070] bg-white h-[200px] overflow-y-auto shadow-inner">
               <table className="w-full text-left text-[11.5px] border-collapse">
                 <thead className="bg-[#e9ecef] sticky top-0 border-b border-[#cbd5e1] text-slate-700 font-semibold">
                   <tr>
@@ -380,7 +461,7 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
                               isSelected ? 'bg-blue-800 text-white' : 'bg-slate-100 text-slate-800 border border-slate-300'
                             }`}
                           >
-                            &lt;{ctrl.abbr}&gt;
+                            «{ctrl.abbr}»
                           </span>
                         </td>
                         <td className="py-1 px-2 font-mono">{ctrl.code}</td>
@@ -398,13 +479,13 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
 
             {/* Control Character Detail Banner */}
             {selectedControl && (
-              <div className="bg-[#eff6ff] border border-[#bfdbfe] rounded p-2 text-[11px] text-slate-700 flex items-start gap-2">
+              <div className="bg-[#eff6ff] border border-[#bfdbfe] rounded p-1.5 text-[11px] text-slate-700 flex items-start gap-2">
                 <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold text-blue-900">
-                    &lt;{selectedControl.abbr}&gt; {selectedControl.name} (ASCII {selectedControl.code}, 0x{selectedControl.hex})
+                    «{selectedControl.abbr}» {selectedControl.name} (ASCII {selectedControl.code}, 0x{selectedControl.hex})
                   </span>
-                  <p className="text-slate-600 mt-0.5">
+                  <p className="text-slate-600 mt-0.5 text-[10.5px]">
                     {selectedControl.barcodeUsage ? (
                       <span className="text-amber-900 font-medium">{selectedControl.barcodeUsage}</span>
                     ) : (
@@ -417,12 +498,50 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
           </div>
         )}
 
+        {/* SHARED RECENTLY USED CHARACTERS STRIP (Accessible across both tabs) */}
+        <div className="px-3 py-1.5 bg-[#f8fafc] border-t border-[#cbd5e1] space-y-1">
+          <label className="text-[10.5px] font-semibold text-slate-700 block">Recently Used Characters:</label>
+          <div className="flex items-center gap-[3px] overflow-x-auto p-0.5">
+            {recentSymbols.slice(0, 24).map((sym, idx) => {
+              const isSelected =
+                (activeTab === 'symbols' && selectedChar === sym) ||
+                (activeTab === 'controls' && selectedControl && controlCharacterToToken(selectedControl.char) === sym);
+              const isControlToken = sym.startsWith('«') || sym.startsWith('<');
+
+              return (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleSelectRecent(sym)}
+                  onDoubleClick={() => handleDoubleClickRecent(sym)}
+                  title={
+                    isControlToken
+                      ? `Control token: ${sym} (Click to select, double-click to insert)`
+                      : `${sym} (U+${getUnicodeHex(sym)}) - ${getCharacterName(sym)}`
+                  }
+                  className={`min-w-[24px] h-6 px-1 flex items-center justify-center text-[11px] border rounded-2xs cursor-pointer ${
+                    isControlToken ? 'font-mono font-bold text-[10px]' : 'font-sans'
+                  } ${
+                    isSelected
+                      ? 'bg-[#0078d7] text-white border-[#005a9e] font-bold shadow-2xs'
+                      : 'bg-white hover:bg-[#e0eeff] text-slate-800 border-[#cbd5e1]'
+                  }`}
+                >
+                  {sym}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Bottom Actions Bar */}
         <div className="bg-[#e4ebf5] border-t border-[#cbd5e1] px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <label className="text-[11.5px] font-medium text-slate-700">Size:</label>
             <select
-              value={selectedSize}
+              aria-label="Character Size"
+              disabled={activeTab === 'controls'}
+              value={activeTab === 'controls' ? 'Auto' : selectedSize}
               onChange={(e) => setSelectedSize(e.target.value)}
               className="bg-white border border-[#94a3b8] rounded px-2 py-0.8 text-[11.5px] text-slate-800 outline-none focus:border-[#0078d7]"
             >
@@ -436,13 +555,23 @@ export const SpecialCharacterModal: React.FC<SpecialCharacterModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleInsert}
-              className="px-5 py-1 bg-[#0078d7] hover:bg-[#0063b1] active:bg-[#004e8c] text-white font-medium rounded-xs text-[11.5px] shadow-2xs cursor-pointer min-w-[75px]"
-            >
-              Insert
-            </button>
+            {(() => {
+              const isInsertDisabled = activeTab === 'symbols' ? !selectedChar : !selectedControl;
+              return (
+                <button
+                  type="button"
+                  disabled={isInsertDisabled}
+                  onClick={handleInsert}
+                  className={`px-5 py-1 font-medium rounded-xs text-[11.5px] shadow-2xs min-w-[75px] ${
+                    isInsertDisabled
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed border border-slate-300'
+                      : 'bg-[#0078d7] hover:bg-[#0063b1] active:bg-[#004e8c] text-white cursor-pointer'
+                  }`}
+                >
+                  Insert
+                </button>
+              );
+            })()}
             <button
               type="button"
               onClick={onClose}

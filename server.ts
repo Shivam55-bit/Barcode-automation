@@ -3,6 +3,9 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { createBackendApp } from './barcode-automation-backend/src/app';
+import type { Server } from 'node:http';
+
+export { getLegacyPasswordAccounts, initializeLegacyPassword } from './barcode-automation-backend/src/routes/users';
 
 dotenv.config();
 
@@ -13,7 +16,7 @@ async function startServer() {
   console.log('[Server] Backend app initialized successfully');
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
-  const distPath = path.resolve(process.cwd(), 'dist');
+  const distPath = path.resolve(process.env.BARCODEFLOW_DIST_DIR || path.join(process.cwd(), 'dist'));
   const indexPath = path.join(distPath, 'index.html');
   const hasBuiltAssets = fs.existsSync(indexPath);
 
@@ -44,14 +47,14 @@ async function startServer() {
     });
   }
 
-  // Start listening immediately so REST API is online in 5ms
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`=======================================================`);
-    console.log(`  🚀 Enterprise Barcode Platform Server running on port ${PORT}`);
-    console.log(`  📁 Backend Service: ./barcode-automation-backend/`);
-    console.log(`  💾 Storage: SQLite (WAL mode) with Automatic JSON Bi-directional Sync in ./barcode-automation-backend/data/`);
-    console.log(`=======================================================`);
+  const server = await new Promise<Server>((resolve, reject) => {
+    const listener = app.listen(PORT, '127.0.0.1', () => resolve(listener));
+    listener.once('error', reject);
   });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Backend failed to assign a TCP port.');
+  console.log(`[Server] Ready at http://127.0.0.1:${address.port}`);
+  process.send?.({ type: 'backend-ready', port: address.port });
 
   // Attach live Vite dev middleware in background
   if (!hasBuiltAssets && process.env.NODE_ENV !== 'production') {
@@ -75,9 +78,11 @@ async function startServer() {
       }
     })();
   }
+  return server;
 }
 
-startServer().catch((err) => {
+export const serverReady = startServer();
+serverReady.catch((err) => {
   console.error('[Server] Fatal startup error:', err);
   process.exit(1);
 });

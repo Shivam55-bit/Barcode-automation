@@ -11,6 +11,7 @@ export interface BarTenderImportModalProps {
   onOpenExcel?: () => void;
   onNewTemplate?: () => void;
   onSelectSupportedInterchange?: () => void;
+  onExtractWithBarTender?: () => void;
 }
 
 export const BarTenderImportModal: React.FC<BarTenderImportModalProps> = ({
@@ -22,6 +23,7 @@ export const BarTenderImportModal: React.FC<BarTenderImportModalProps> = ({
   onOpenExcel,
   onNewTemplate,
   onSelectSupportedInterchange,
+  onExtractWithBarTender,
 }) => {
   return (
     <Modal
@@ -47,7 +49,7 @@ export const BarTenderImportModal: React.FC<BarTenderImportModalProps> = ({
         {/* Explanation & Instructions */}
         <div className="space-y-2 text-xs leading-relaxed text-slate-600">
           <p>
-            Direct <code className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-mono text-[11px]">.btw</code> binary import requires a supported BarTender conversion or SDK integration on this workstation.
+            Assisted <code className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-mono text-[11px]">.btw</code> import requires installed, licensed BarTender Automation/Enterprise Automation with ActiveX support on Windows. Only verified objects become a partial native draft; unresolved properties remain in the report.
           </p>
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-md space-y-1.5">
             <div className="font-semibold text-slate-700 text-xs">Supported Options:</div>
@@ -56,10 +58,10 @@ export const BarTenderImportModal: React.FC<BarTenderImportModalProps> = ({
                 Connect the label's database or spreadsheet (Excel / CSV) directly into BarcodeFlow.
               </li>
               <li>
-                Create a matching label template using BarcodeFlow's native <code className="px-1 py-0.5 bg-blue-50 text-blue-700 rounded font-mono font-medium">.bfl</code> format with 100% industrial printer fidelity.
+                Create a matching native label and verify its output against the source.
               </li>
               <li>
-                Export from BarTender as CSV or structured schema to auto-bind fields.
+                Open a documented BarTender observation JSON. Only verified properties are converted; remaining objects and behaviors are reported as unsupported.
               </li>
             </ul>
           </div>
@@ -67,7 +69,24 @@ export const BarTenderImportModal: React.FC<BarTenderImportModalProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {onExtractWithBarTender && (
+              <button type="button" onClick={() => { onClose(); onExtractWithBarTender(); }}
+                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 rounded text-xs font-medium flex items-center gap-1.5">
+                <FileCode className="w-3.5 h-3.5" />
+                Import BTW with BarTender
+              </button>
+            )}
+            {onSelectSupportedInterchange && (
+              <button
+                type="button"
+                onClick={() => { onClose(); onSelectSupportedInterchange(); }}
+                className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 rounded text-xs font-medium flex items-center gap-1.5"
+              >
+                <FileCode className="w-3.5 h-3.5" />
+                Open Extraction JSON
+              </button>
+            )}
             {onOpenExcel && (
               <button
                 type="button"

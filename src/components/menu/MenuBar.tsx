@@ -53,6 +53,7 @@ interface MenuBarProps {
   onNew: () => void;
   onOpenPrinterManager?: () => void;
   onOpen: () => void;
+  onImportBarTender?: () => void;
   onCloseDocument?: () => void;
   onCloseAllDocuments?: () => void;
   onSave: () => void;
@@ -85,6 +86,7 @@ interface MenuBarProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomFit: () => void;
+  canZoomViewport?: boolean;
   onZoom100: () => void;
   onToggleGrid: () => void;
   onToggleRulers: () => void;
@@ -132,6 +134,7 @@ interface MenuBarProps {
   onPageSetup?: () => void;
   onOpenNamedDataSources?: () => void;
   onOpenDocumentScripts?: () => void;
+  onOpenScriptEditor?: () => void;
   onOpenDataImport?: () => void;
   onOpenFormulaBuilder?: () => void;
   onOpenDataEntryFormDesigner?: () => void;
@@ -172,6 +175,69 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
     }
   };
 
+  const [isMaximized, setIsMaximized] = useState<boolean>(false);
+
+  useEffect(() => {
+    const checkMax = async () => {
+      const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+      if (electronAPI?.isWindowMaximized) {
+        try {
+          const max = await electronAPI.isWindowMaximized();
+          setIsMaximized(max);
+        } catch {}
+      }
+    };
+    checkMax();
+
+    const handleFullscreenChange = () => {
+      setIsMaximized(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const handleMinimizeWindow = async () => {
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+    if (electronAPI?.minimizeWindow) {
+      await electronAPI.minimizeWindow();
+    } else {
+      // Browser mode: collapse or alert
+      console.log('Minimize triggered');
+    }
+  };
+
+  const handleMaximizeWindow = async () => {
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+    if (electronAPI?.maximizeWindow) {
+      try {
+        const nowMax = await electronAPI.maximizeWindow();
+        setIsMaximized(nowMax);
+      } catch {}
+    } else {
+      // Web browser: Toggle Fullscreen
+      try {
+        if (!document.fullscreenElement) {
+          await document.documentElement.requestFullscreen();
+          setIsMaximized(true);
+        } else {
+          await document.exitFullscreen();
+          setIsMaximized(false);
+        }
+      } catch (err) {
+        console.warn('Fullscreen toggle:', err);
+      }
+    }
+  };
+
+  const handleCloseWindow = async () => {
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+    if (electronAPI?.closeWindow) {
+      await electronAPI.closeWindow();
+    } else {
+      props.setActiveView('dashboard');
+    }
+  };
+
   const executeAction = (action?: () => void) => {
     setOpenMenu(null);
     if (action) action();
@@ -197,19 +263,28 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
         {/* Right: Window Controls */}
         <div className="flex items-center -mr-2">
           <button
+            type="button"
+            onClick={handleMinimizeWindow}
             title="Minimize"
-            className="w-10 h-7 flex items-center justify-center hover:bg-[#d5e0ee] text-slate-600 transition-colors"
+            className="w-10 h-7 flex items-center justify-center hover:bg-[#d5e0ee] text-slate-600 transition-colors cursor-pointer"
           >
             <Minus className="w-3.5 h-3.5" />
           </button>
           <button
-            title="Maximize"
-            className="w-10 h-7 flex items-center justify-center hover:bg-[#d5e0ee] text-slate-600 transition-colors"
+            type="button"
+            onClick={handleMaximizeWindow}
+            title={isMaximized ? "Restore" : "Maximize"}
+            className="w-10 h-7 flex items-center justify-center hover:bg-[#d5e0ee] text-slate-600 transition-colors cursor-pointer"
           >
-            <WindowSquare className="w-3 h-3" />
+            {isMaximized ? (
+              <Copy className="w-3 h-3" />
+            ) : (
+              <WindowSquare className="w-3 h-3" />
+            )}
           </button>
           <button
-            onClick={() => props.setActiveView('dashboard')}
+            type="button"
+            onClick={handleCloseWindow}
             title="Close Studio & Return to Dashboard"
             className="w-11 h-7 flex items-center justify-center hover:bg-red-600 hover:text-white text-slate-600 transition-colors cursor-pointer"
           >
@@ -249,6 +324,10 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                   shortcut="Ctrl+O"
                   onClick={() => executeAction(props.onOpen)}
                 />
+                {props.onImportBarTender && (
+                  <MenuItem icon={<Upload className="w-4 h-4" />} label="Import BarTender Template..."
+                    onClick={() => executeAction(props.onImportBarTender)} />
+                )}
                 {props.onCloseDocument && (
                   <MenuItem
                     icon={<X className="w-3.5 h-3.5 text-slate-500" />}
@@ -347,7 +426,7 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                 />
                 <MenuItem
                   icon={<Download className="w-3.5 h-3.5 text-slate-600" />}
-                  label="Export Document (.bfl / JSON)..."
+                  label="Export Portable Editable Template (.bfl)..."
                   onClick={() => executeAction(props.onExportJSON)}
                 />
                 <MenuItem
@@ -467,6 +546,14 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                       shortcut="F8"
                       onClick={() => executeAction(props.onOpenProperties || props.onOpenBarcodeProperties!)}
                     />
+                    {(props.onOpenScriptEditor || props.onOpenDocumentScripts) && (
+                      <MenuItem
+                        icon={<Code2 className="w-3.5 h-3.5 text-emerald-600" />}
+                        label="Scripts..."
+                        shortcut="Alt+Enter"
+                        onClick={() => executeAction(props.onOpenScriptEditor || props.onOpenDocumentScripts!)}
+                      />
+                    )}
                   </>
                 )}
                 <MenuDivider />
@@ -512,6 +599,8 @@ export const MenuBar: React.FC<MenuBarProps> = (props) => {
                 <MenuItem
                   icon={<Maximize2 className="w-3.5 h-3.5 text-slate-600" />}
                   label="Fit to Window"
+                  shortcut="F3"
+                  disabled={props.canZoomViewport === false}
                   onClick={() => executeAction(props.onZoomFit)}
                 />
                 <MenuDivider />

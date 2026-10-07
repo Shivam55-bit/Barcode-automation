@@ -42,7 +42,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     let errorMsg = `HTTP Error ${response.status} (${response.statusText})`;
     try {
       const errData = await response.json();
-      if (errData.error) errorMsg = errData.error;
+      if (typeof errData.message === 'string' && errData.message.trim()) errorMsg = errData.message;
+      else if (typeof errData.error === 'string' && errData.error.trim()) errorMsg = errData.error;
     } catch {
       // ignore
     }
@@ -671,109 +672,17 @@ export const apiService = {
   // --- Authentication & User Management API ---
   auth: {
     login: async (credentials: { email: string; password?: string }): Promise<{ success: boolean; user: UserProfile; token: string; message?: string }> => {
-      try {
-        return await request<{ success: boolean; user: UserProfile; token: string; message?: string }>('/auth/login', {
-          method: 'POST',
-          body: JSON.stringify(credentials),
-        });
-      } catch (err: any) {
-        // Try fallback to /users/login
-        try {
-          return await request<{ success: boolean; user: UserProfile; token: string; message?: string }>('/users/login', {
-            method: 'POST',
-            body: JSON.stringify(credentials),
-          });
-        } catch {
-          // Check local pending users in case running offline
-          const savedPendingStr = localStorage.getItem('barcodeflow_pending_users');
-          if (savedPendingStr) {
-            const localPending: UserProfile[] = JSON.parse(savedPendingStr);
-            const found = localPending.find(
-              (u) => u.email?.toLowerCase() === credentials.email.trim().toLowerCase()
-            );
-            if (found) {
-              if (found.status === 'pending_approval' || found.isApproved === false) {
-                throw new Error(
-                  'Your Admin registration is pending approval by the Super Admin. Please contact superadmin@gmail.com for activation.'
-                );
-              }
-              if (found.status === 'suspended') {
-                throw new Error('Your Admin account has been suspended by the Super Administrator.');
-              }
-              return {
-                success: true,
-                user: found,
-                token: `token-${found.id}-${Date.now()}`,
-                message: `Welcome back, ${found.name}!`,
-              };
-            }
-          }
-          throw err;
-        }
-      }
+      return request<{ success: boolean; user: UserProfile; token: string; message?: string }>('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(credentials),
+      });
     },
 
     register: async (payload: { name: string; email: string; password?: string; department?: string; role?: string }): Promise<{ success: boolean; message: string; user: UserProfile }> => {
-      try {
-        return await request<{ success: boolean; message: string; user: UserProfile }>('/auth/register', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
-      } catch (err: any) {
-        try {
-          return await request<{ success: boolean; message: string; user: UserProfile }>('/users/register', {
-            method: 'POST',
-            body: JSON.stringify(payload),
-          });
-        } catch {
-          // Client-side fail-safe storage
-          const savedPendingStr = localStorage.getItem('barcodeflow_pending_users') || '[]';
-          const pendingList: UserProfile[] = JSON.parse(savedPendingStr);
-          const newPending: UserProfile = {
-            id: `usr-admin-${Date.now()}`,
-            name: payload.name.trim(),
-            email: payload.email.trim().toLowerCase(),
-            password: payload.password?.trim() || 'password123',
-            role: (payload.role as any) || 'Admin',
-            department: payload.department?.trim() || 'Packaging Operations',
-            avatar: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces`,
-            status: 'pending_approval',
-            isApproved: false,
-            createdAt: new Date().toISOString(),
-            permissions: {
-              canDesignTemplates: true,
-              canCreateTemplates: true,
-              canDeleteTemplates: false,
-              canApproveWorkflow: true,
-              canPrintAndSpool: true,
-              canManageDatasets: true,
-              canCalibratePrinters: false,
-              canManageLicense: false,
-              canDownloadDesktopApp: true,
-              canViewAuditLogs: true,
-            },
-          };
-
-          // Don't duplicate if same email
-          const existingIdx = pendingList.findIndex(
-            (p) => p.email?.toLowerCase() === newPending.email.toLowerCase()
-          );
-          if (existingIdx >= 0) {
-            pendingList[existingIdx] = newPending;
-          } else {
-            pendingList.push(newPending);
-          }
-
-          localStorage.setItem('barcodeflow_pending_users', JSON.stringify(pendingList));
-
-          return {
-            success: true,
-            message:
-              'Admin registration submitted successfully! Your account is now pending approval by the Super Admin (superadmin@gmail.com).',
-            user: newPending,
-          };
-        }
-      }
+      return request<{ success: boolean; message: string; user: UserProfile }>('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
     },
   },
 

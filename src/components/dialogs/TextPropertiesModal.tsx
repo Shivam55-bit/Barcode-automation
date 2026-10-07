@@ -7,11 +7,25 @@ import {
   TransformConfig,
   BorderConfig,
   ArcConfig,
-  AutoSizeConfig,
   ReferencePoint,
 } from '../../types';
-import { evaluateElementData, evaluateTextElement, formatCustomDate } from '../../services/dataSourceEngine';
-import { recalculateTextElementDimensions } from '../../services/textMeasurementEngine';
+import { evaluateDataSourceItem, evaluateElementData, evaluateTextElement, evaluateTextElementRuns, formatCustomDate } from '../../services/dataSourceEngine';
+import { getTextElementMarkup } from '../../services/textMarkupEngine';
+import {
+  convertTextElementFormat,
+  fitTextToBox,
+  isTextFitToBoxEnabled,
+  measureTextObject,
+  recalculateTextElementDimensions,
+  scaleTextRunsForFit,
+} from '../../services/textMeasurementEngine';
+import {
+  insertAtSelection,
+  getDataSourceDisplayPreview,
+  getMultiLineLayoutValue,
+  resolveStoredControlValue,
+} from '../../services/controlCharacterService';
+import { ControlCharacterInfo } from '../../services/symbolService';
 import { SerializationModal } from './SerializationModal';
 import {
   SuppressionModal,
@@ -41,10 +55,16 @@ import {
   Layers,
   Settings,
   HelpCircle,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { DatabaseFieldSourceConfig } from './DatabaseFieldSourceConfig';
+import { ProfessionalDataSourceConfig } from './ProfessionalDataSourceConfig';
 import { NewDataSourceWizardModal } from './NewDataSourceWizardModal';
 import { SpecialCharacterModal } from './SpecialCharacterModal';
+import { DataSourceFontsModal } from './DataSourceFontsModal';
+import { NamedDataSource, CalculatedFieldDefinition, LabelElement, LabelTemplate } from '../../types';
+import { ScriptEditorModal } from './ScriptEditorModal';
 
 interface TextPropertiesModalProps {
   isOpen: boolean;
@@ -56,6 +76,13 @@ interface TextPropertiesModalProps {
   currentRecord?: Record<string, any>;
   currentConnection?: any;
   onConnectDataset?: (dataset: any) => void;
+  namedDataSources?: NamedDataSource[];
+  calculatedFields?: CalculatedFieldDefinition[];
+  elements?: LabelElement[];
+  globalData?: Record<string, any>;
+  currentRecordIndex?: number;
+  totalRecords?: number;
+  template?: LabelTemplate;
 }
 
 type TextCategory =
@@ -76,6 +103,13 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
   currentRecord,
   currentConnection,
   onConnectDataset,
+  namedDataSources = [],
+  calculatedFields = [],
+  elements = [],
+  globalData = {},
+  currentRecordIndex = 0,
+  totalRecords = 1,
+  template,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<TextCategory>('datasource-item');
   const [activeDsIndex, setActiveDsIndex] = useState<number>(0);
@@ -84,10 +118,17 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
   // Font sub-tabs
   const [fontSubTab, setFontSubTab] = useState<'style' | 'outline' | 'width' | 'advanced'>('style');
   // Text Format sub-tabs
-  const [formatSubTab, setFormatSubTab] = useState<'autosize' | 'tabs' | 'effects'>('autosize');
+  const [formatSubTab, setFormatSubTab] = useState<'general' | 'autosize' | 'tabs' | 'spacing' | 'effects'>('general');
 
   // Working Draft State (reverts on Cancel/X, commits on OK)
   const [draftElement, setDraftElement] = useState<TextElement | null>(null);
+  const scriptEditorTemplate = useMemo(() => {
+    if (!draftElement || !template) return null;
+    return {
+      ...template,
+      elements: template.elements.map((item) => item.id === draftElement.id ? draftElement : item),
+    };
+  }, [draftElement, template]);
 
   // System fonts
   const [systemFonts, setSystemFonts] = useState<string[]>([]);
@@ -100,30 +141,23 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
 
   // New Data Source Wizard
   const [isWizardOpen, setIsWizardOpen] = useState<boolean>(false);
+  const [isScriptEditorOpen, setIsScriptEditorOpen] = useState(false);
+
+  // Font per Data Source Modal
+  const [isDataSourceFontsModalOpen, setIsDataSourceFontsModalOpen] = useState<boolean>(false);
 
   // Insert Symbols or Special Characters Modal
   const [isSpecialCharModalOpen, setIsSpecialCharModalOpen] = useState<boolean>(false);
+  const [specialCharModalTab, setSpecialCharModalTab] = useState<'symbols' | 'controls'>('symbols');
   const embeddedTextareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const handleInsertSpecialChar = (symbol: string) => {
-    const textarea = embeddedTextareaRef.current;
-    const currentVal = activeDataSource.value || '';
-    if (textarea) {
-      const start = textarea.selectionStart ?? currentVal.length;
-      const end = textarea.selectionEnd ?? currentVal.length;
-      const nextVal = currentVal.substring(0, start) + symbol + currentVal.substring(end);
-      updateActiveDs({ value: nextVal });
-      setTimeout(() => {
-        if (embeddedTextareaRef.current) {
-          embeddedTextareaRef.current.focus();
-          const newPos = start + symbol.length;
-          embeddedTextareaRef.current.setSelectionRange(newPos, newPos);
-        }
-      }, 0);
-    } else {
-      updateActiveDs({ value: currentVal + symbol });
-    }
-  };
+  const insertionObjectIdRef = useRef<string | null>(null);
+  const insertionHistoryRef = useRef<{ undo: TextElement[]; redo: TextElement[] }>({ undo: [], redo: [] });
+  const savedSelectionRef = useRef<{
+    start: number;
+    end: number;
+    sourceId: string;
+    sourceIndex: number;
+  }>({ start: 0, end: 0, sourceId: '', sourceIndex: 0 });
 
   // Physical units for position
   const [posUnit, setPosUnit] = useState<'mm' | 'cm' | 'inch'>('mm');
@@ -173,6 +207,10 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
         ];
       }
 
+      copy.dataSources = copy.dataSources.map(source => source.type === 'embedded'
+        ? { ...source, value: resolveStoredControlValue(source.value ?? '', source.valueEncoding), valueEncoding: 'raw' }
+        : source);
+
       // Ensure borderConfig exists
       if (!copy.borderConfig) {
         copy.borderConfig = {
@@ -207,22 +245,24 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
         };
       }
 
-      // Ensure autoSizeConfig exists
-      if (!copy.autoSizeConfig) {
-        copy.autoSizeConfig = {
-          enabled: !!copy.autoSize || !!copy.autoFit,
-          minFontSize: copy.minFontSize || 6,
-          maxFontSize: copy.maxFontSize || 720,
-          minWidthScale: copy.minWidthScale || 50,
-          maxWidthScale: copy.maxWidthScale || 200,
-          objectWidth: copy.width || 40,
-          objectHeight: copy.height || 15,
-          horizontalAlignment: copy.horizontalAlignment || copy.textAlign || 'left',
-          verticalAlignment: copy.verticalAlignment || copy.verticalAlign || 'top',
-        };
-      }
+      copy.autoSizeConfig = {
+        ...copy.autoSizeConfig,
+        enabled: copy.autoSizeConfig?.enabled ?? (
+          copy.sizingMode === 'fit-to-box' || copy.sizingMode === 'shrink-to-fit' || (!copy.sizingMode && !!copy.autoFit)
+        ),
+        minFontSize: copy.autoSizeConfig?.minFontSize ?? copy.minFontSize ?? 1,
+        maxFontSize: copy.autoSizeConfig?.maxFontSize ?? copy.maxFontSize ?? 720,
+        minWidthScale: copy.autoSizeConfig?.minWidthScale ?? copy.minWidthScale ?? 100,
+        maxWidthScale: copy.autoSizeConfig?.maxWidthScale ?? copy.maxWidthScale ?? 100,
+        objectWidth: copy.autoSizeConfig?.objectWidth ?? copy.width,
+        objectHeight: copy.autoSizeConfig?.objectHeight ?? copy.height,
+        horizontalAlignment: copy.autoSizeConfig?.horizontalAlignment ?? copy.horizontalAlignment ??
+          (copy.textAlign === 'distributed' ? 'left' : copy.textAlign) ?? 'left',
+        verticalAlignment: copy.autoSizeConfig?.verticalAlignment ?? copy.verticalAlignment ?? copy.verticalAlign ?? 'top',
+      };
 
       setDraftElement(copy);
+      insertionHistoryRef.current = { undo: [], redo: [] };
       setActiveDsIndex(0);
       setSelectedCategory('datasource-item');
     }
@@ -242,16 +282,24 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
 
   // Helper to update draft
   const updateDraft = (updates: Partial<TextElement>) => {
+    insertionHistoryRef.current = { undo: [], redo: [] };
     setDraftElement((prev) => {
       if (!prev) return null;
       const updated = { ...prev, ...updates };
+      if (
+        (prev.textType === 'multi-line' || prev.textType === 'paragraph' || prev.textFormatType === 'paragraph') &&
+        updates.width !== undefined &&
+        updates.paragraphWidth === undefined
+      ) {
+        updated.paragraphWidth = updates.width;
+      }
       // Re-evaluate combined text
       const compiled = evaluateTextElement(updated, { record: currentRecord, datasets });
       updated.text = compiled;
 
       // If Auto Size is active and manual width/height wasn't explicitly changed without autoSize
-      if (updated.autoSize !== false) {
-        const dims = recalculateTextElementDimensions(updated, compiled);
+      if (updated.sizingMode === 'auto-width' || (!updated.sizingMode && updated.autoSize !== false)) {
+        const dims = recalculateTextElementDimensions(updated, compiled, undefined, evaluateTextElementRuns(updated, { record: currentRecord, datasets }));
         updated.width = dims.width;
         updated.height = dims.height;
       }
@@ -262,8 +310,178 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
 
   // Helper to update active data source
   const updateActiveDs = (dsUpdates: Partial<DataSourceItem>) => {
-    const updatedSources = dataSources.map((ds, idx) => (idx === currentDsIndex ? { ...ds, ...dsUpdates } : ds));
+    const updatedSources = dataSources.map((ds, idx) => (idx === currentDsIndex
+      ? { ...ds, ...dsUpdates, ...(dsUpdates.value !== undefined && ds.type === 'embedded' ? { valueEncoding: 'raw' as const } : {}) }
+      : ds));
     updateDraft({ dataSources: updatedSources });
+  };
+
+  const handleOpenSpecialCharacters = (defaultTab?: 'symbols' | 'controls') => {
+    insertionObjectIdRef.current = element?.id ?? null;
+    const textarea = embeddedTextareaRef.current;
+    const targetSource = dataSources.find((source) => source.id === savedSelectionRef.current.sourceId) || activeDataSource;
+    const currentVal = targetSource?.value || '';
+    const start = textarea && document.activeElement === textarea
+      ? (textarea.selectionStart ?? savedSelectionRef.current.start ?? 0)
+      : (savedSelectionRef.current.start ?? 0);
+    const end = textarea && document.activeElement === textarea
+      ? (textarea.selectionEnd ?? savedSelectionRef.current.end ?? currentVal.length)
+      : (savedSelectionRef.current.end ?? currentVal.length);
+
+    savedSelectionRef.current = {
+      start: Math.max(0, Math.min(start, currentVal.length)),
+      end: Math.max(Math.max(0, Math.min(start, currentVal.length)), Math.min(end, currentVal.length)),
+      sourceId: targetSource.id,
+      sourceIndex: dataSources.findIndex((source) => source.id === targetSource.id) >= 0
+        ? dataSources.findIndex((source) => source.id === targetSource.id)
+        : currentDsIndex,
+    };
+
+    if (textarea && targetSource.type === 'embedded') {
+      const nextStart = savedSelectionRef.current.start;
+      const nextEnd = savedSelectionRef.current.end;
+      textarea.focus();
+      textarea.setSelectionRange(nextStart, nextEnd);
+    }
+
+    setSpecialCharModalTab(defaultTab || (targetSource.type === 'control-character' ? 'controls' : 'symbols'));
+    setIsSpecialCharModalOpen(true);
+  };
+
+  const handleSelectionChange = (start: number, end: number) => {
+    savedSelectionRef.current = {
+      start,
+      end,
+      sourceId: activeDataSource.id,
+      sourceIndex: currentDsIndex,
+    };
+  };
+
+  const focusEmbeddedSourceEditor = (targetSourceId: string, explicitRange?: { start: number; end: number }) => {
+    const targetIndex = dataSources.findIndex((source) => source.id === targetSourceId);
+    const targetSource = targetIndex >= 0 ? dataSources[targetIndex] : activeDataSource;
+    if (!targetSource || targetSource.type !== 'embedded') return;
+
+    const value = targetSource.value ?? '';
+    const start = Math.max(0, Math.min(explicitRange?.start ?? 0, value.length));
+    const end = Math.max(start, Math.min(explicitRange?.end ?? value.length, value.length));
+    savedSelectionRef.current = {
+      start,
+      end,
+      sourceId: targetSource.id,
+      sourceIndex: targetIndex >= 0 ? targetIndex : currentDsIndex,
+    };
+
+    requestAnimationFrame(() => {
+      if (!embeddedTextareaRef.current) return;
+      embeddedTextareaRef.current.focus();
+      embeddedTextareaRef.current.setSelectionRange(start, end);
+    });
+  };
+
+  const handleInsertSpecialChar = (symbol: string, size?: string, controlInfo?: ControlCharacterInfo) => {
+    if (insertionObjectIdRef.current !== element?.id) return false;
+    const targetSourceId = savedSelectionRef.current.sourceId || activeDataSource.id;
+    const targetSourceIndex = savedSelectionRef.current.sourceIndex ?? currentDsIndex;
+
+    const targetDs = dataSources.find(ds => ds.id === targetSourceId);
+    if (!targetDs) return false;
+
+    if (targetDs.type !== 'embedded') {
+      if (!controlInfo) return false;
+      const sourceIndex = dataSources.findIndex(ds => ds.id === targetSourceId);
+      const insertionIndex = Math.max(0, Math.min(sourceIndex >= 0 ? sourceIndex + 1 : targetSourceIndex + 1, dataSources.length));
+      const controlSourceId = `ds-control-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const controlSource: DataSourceItem = {
+        id: controlSourceId,
+        name: `<${controlInfo.abbr}>`,
+        type: 'control-character',
+        controlCode: controlInfo.abbr,
+        code: controlInfo.abbr,
+        decimal: controlInfo.code,
+        hex: controlInfo.hex,
+        value: controlInfo.char,
+        valueEncoding: 'raw',
+        enabled: true,
+      };
+      const updatedSources = [
+        ...dataSources.slice(0, insertionIndex),
+        controlSource,
+        ...dataSources.slice(insertionIndex),
+      ];
+      const updatedDraft: TextElement = { ...draftElement!, dataSources: updatedSources };
+      const compiled = evaluateTextElement(updatedDraft, { record: currentRecord, datasets });
+      updatedDraft.text = compiled;
+      if (updatedDraft.sizingMode === 'auto-width' || (!updatedDraft.sizingMode && updatedDraft.autoSize !== false)) {
+        const dims = recalculateTextElementDimensions(updatedDraft, compiled, undefined, evaluateTextElementRuns(updatedDraft, { record: currentRecord, datasets }));
+        updatedDraft.width = dims.width;
+        updatedDraft.height = dims.height;
+      }
+
+      insertionHistoryRef.current.undo.push(draftElement!);
+      insertionHistoryRef.current.redo = [];
+      savedSelectionRef.current = { start: 0, end: 0, sourceId: controlSourceId, sourceIndex: insertionIndex };
+      setActiveDsIndex(insertionIndex);
+      setSelectedCategory('datasource-item');
+      setDraftElement(updatedDraft);
+      return true;
+    }
+
+    const currentVal = targetDs.value || '';
+    const start = savedSelectionRef.current.start ?? currentVal.length;
+    const end = savedSelectionRef.current.end ?? currentVal.length;
+
+    let updatedSources: DataSourceItem[];
+    let newCursor = start + (symbol ? symbol.length : 0);
+
+    const inserted = controlInfo?.char ?? symbol;
+    const res = insertAtSelection(currentVal, inserted, start, end);
+    newCursor = res.newCursor;
+    updatedSources = dataSources.map(ds => ds.id === targetSourceId
+      ? { ...ds, type: 'embedded', value: res.value, valueEncoding: 'raw', controlCode: undefined, code: undefined }
+      : ds);
+
+    savedSelectionRef.current = {
+      start: newCursor,
+      end: newCursor,
+      sourceId: targetDs.id,
+      sourceIndex: targetSourceIndex,
+    };
+
+    const updatedDraft: TextElement = {
+      ...draftElement!,
+      dataSources: updatedSources,
+    };
+
+    if (!controlInfo && size && size !== 'Auto') {
+      const parsedSize = parseFloat(size);
+      if (!isNaN(parsedSize) && parsedSize > 0) {
+        updatedDraft.fontSize = parsedSize;
+      }
+    }
+
+    const compiled = evaluateTextElement(updatedDraft, { record: currentRecord, datasets });
+    updatedDraft.text = compiled;
+
+    if (updatedDraft.sizingMode === 'auto-width' || (!updatedDraft.sizingMode && updatedDraft.autoSize !== false)) {
+    const dims = recalculateTextElementDimensions(updatedDraft, compiled, undefined, evaluateTextElementRuns(updatedDraft, { record: currentRecord, datasets }));
+      updatedDraft.width = dims.width;
+      updatedDraft.height = dims.height;
+    }
+
+    insertionHistoryRef.current.undo.push(draftElement);
+    insertionHistoryRef.current.redo = [];
+    setDraftElement(updatedDraft);
+
+    setTimeout(() => {
+      if (embeddedTextareaRef.current) {
+        try {
+          embeddedTextareaRef.current.focus();
+          embeddedTextareaRef.current.setSelectionRange(newCursor, newCursor);
+        } catch {}
+      }
+    }, 0);
+    return true;
   };
 
   // Commit changes to canvas
@@ -279,16 +497,38 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
     onClose();
   };
 
+  const restoreInsertion = (direction: 'undo' | 'redo') => {
+    const previous = insertionHistoryRef.current[direction].pop();
+    if (!previous) return;
+    insertionHistoryRef.current[direction === 'undo' ? 'redo' : 'undo'].push(draftElement);
+    setDraftElement(previous);
+  };
+
   // Data Source List Operations
   const handleOpenWizard = () => {
     setIsWizardOpen(true);
   };
 
   const handleWizardAddDataSource = (newDs: DataSourceItem) => {
+    newDs = { ...newDs, valueEncoding: 'raw' };
     const nextList = [...dataSources, newDs];
     updateDraft({ dataSources: nextList });
     setActiveDsIndex(nextList.length - 1);
     setSelectedCategory('datasource-item');
+    setActiveDsTab('source');
+
+    if (newDs.type === 'embedded') {
+      const nextValue = newDs.value ?? '';
+      savedSelectionRef.current = {
+        start: 0,
+        end: nextValue.length,
+        sourceId: newDs.id,
+        sourceIndex: nextList.length - 1,
+      };
+      window.setTimeout(() => {
+        focusEmbeddedSourceEditor(newDs.id, { start: 0, end: nextValue.length });
+      }, 0);
+    }
   };
 
   const handleAddDataSource = (type: DataSourceType = 'embedded') => {
@@ -372,11 +612,25 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
     : '<None>';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-4 animate-in fade-in duration-150 font-sans select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-4 animate-in fade-in duration-150 font-sans select-none"
+      onKeyDown={event => {
+        if (!(event.ctrlKey || event.metaKey)) return;
+        const key = event.key.toLowerCase();
+        const direction = key === 'y' || (key === 'z' && event.shiftKey) ? 'redo' : key === 'z' ? 'undo' : null;
+        if (direction && insertionHistoryRef.current[direction].length) {
+          event.preventDefault();
+          event.stopPropagation();
+          restoreInsertion(direction);
+        }
+      }}>
       <div
         className="w-[880px] max-w-full bg-[#f0f4f9] rounded-lg shadow-2xl border border-[#718096] flex flex-col overflow-hidden text-slate-800 text-[12px]"
         onClick={(e) => e.stopPropagation()}
       >
+        <div className="flex justify-end gap-1 px-3 bg-[#f0f4f9]">
+          <button type="button" title="Undo Character Insertion (Ctrl+Z)" disabled={!insertionHistoryRef.current.undo.length} onClick={() => restoreInsertion('undo')} className="p-1 disabled:opacity-40"><Undo2 className="w-4 h-4" /></button>
+          <button type="button" title="Redo Character Insertion (Ctrl+Y)" disabled={!insertionHistoryRef.current.redo.length} onClick={() => restoreInsertion('redo')} className="p-1 disabled:opacity-40"><Redo2 className="w-4 h-4" /></button>
+        </div>
         {/* Title Bar */}
         <div className="bg-gradient-to-r from-[#d9e2ec] via-[#bcccdc] to-[#9fb3c8] border-b border-[#829ab1] px-3 py-1.5 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -482,6 +736,7 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                 return (
                   <div
                     key={ds.id || idx}
+                    data-source-id={ds.id}
                     onClick={() => {
                       setActiveDsIndex(idx);
                       setSelectedCategory('datasource-item');
@@ -493,7 +748,7 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                     }`}
                   >
                     <span className="text-[10px] text-blue-600 font-mono">▪</span>
-                    <span className="truncate">{ds.name || ds.value || `Source ${idx + 1}`}</span>
+                    <span className="truncate">{getDataSourceDisplayPreview(ds) || ds.name || `Source ${idx + 1}`}</span>
                   </div>
                 );
               })}
@@ -509,6 +764,24 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                   className="p-1 border border-[#cbd5e1] hover:bg-white rounded text-slate-700 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5 text-emerald-600" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenSpecialCharacters('controls')}
+                  title="Insert Special Character Source After Selected Source"
+                  aria-label="Insert Special Character Source"
+                  className="px-1 border border-[#cbd5e1] hover:bg-white rounded text-slate-700 cursor-pointer font-serif font-bold text-xs"
+                >
+                  Ω
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleOpenSpecialCharacters('controls')}
+                  title="Insert Special Character Source After Selected Source"
+                  aria-label="Insert Special Character Source"
+                  className="px-1 border border-[#cbd5e1] hover:bg-white rounded text-slate-700 cursor-pointer font-serif font-bold text-xs"
+                >
+                  Ω
                 </button>
                 <button
                   type="button"
@@ -657,6 +930,8 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                 {/* Font Sub-Tabs */}
                 <div className="border border-[#cbd5e1] rounded p-3 bg-[#f8fafc] space-y-3">
                   <div className="flex border-b border-[#cbd5e1] pb-1.5 gap-4 text-[11.5px]">
+                    <button type="button" onClick={() => setFormatSubTab('general')} className="cursor-pointer">General</button>
+                    <button type="button" onClick={() => setFormatSubTab('spacing')} className="cursor-pointer">Spacing</button>
                     {['style', 'outline', 'width', 'advanced'].map((st) => (
                       <button
                         key={st}
@@ -823,6 +1098,20 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* TrueType note and Font per Data Source button */}
+                <div className="mt-4 pt-3 border-t border-slate-200">
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    This is a TrueType font. This same font will be used on both your printer and your screen.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsDataSourceFontsModalOpen(true)}
+                    className="px-3 py-1.5 bg-[#f0f0f0] hover:bg-[#e4e4e4] active:bg-[#d8d8d8] text-slate-800 text-[12px] font-medium border border-[#adadad] rounded shadow-xs transition-colors cursor-pointer"
+                  >
+                    Font per Data Source...
+                  </button>
+                </div>
               </div>
             )}
 
@@ -830,26 +1119,55 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
             {selectedCategory === 'text-format' && (
               <div className="space-y-4">
                 {/* Format Type Selection */}
-                <div className="flex items-center gap-6 pb-2 border-b border-slate-200">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pb-2 border-b border-slate-200">
                   <span className="text-[11.5px] text-slate-700 font-medium">Type:</span>
                   {[
                     { id: 'single-line', label: 'Single Line' },
                     { id: 'paragraph', label: 'Paragraph' },
+                    { id: 'multi-line', label: 'Multi-line' },
+                    { id: 'word-processor', label: 'Word Processor' },
                     { id: 'arc', label: 'Arc' },
+                    { id: 'symbol-font', label: 'Symbol Font' },
+                    { id: 'rtf', label: 'RTF' },
+                    { id: 'html', label: 'HTML' },
+                    { id: 'xaml', label: 'XAML' },
                   ].map((fmt) => (
                     <label key={fmt.id} className="flex items-center gap-1.5 cursor-pointer text-[12px] text-slate-800">
                       <input
                         type="radio"
                         name="textFormatType"
-                        checked={(draftElement.textFormatType || draftElement.textType || 'single-line') === fmt.id}
-                        onChange={() =>
+                        checked={(draftElement.textType || draftElement.textFormatType || 'single-line') === fmt.id}
+                        onChange={() => {
+                          const becomesParagraph = fmt.id === 'multi-line' || fmt.id === 'paragraph';
+                          if (becomesParagraph || fmt.id === 'single-line') {
+                            const resolvedText = evaluateTextElement(draftElement, { record: currentRecord, datasets });
+                            const resolvedRuns = draftElement.dataSources?.length
+                              ? evaluateTextElementRuns(draftElement, { record: currentRecord, datasets })
+                              : undefined;
+                            const conversion = convertTextElementFormat(
+                              draftElement,
+                              becomesParagraph ? 'paragraph' : 'single-line',
+                              resolvedText,
+                              resolvedRuns,
+                            );
+                            updateDraft({
+                              ...conversion,
+                              textType: fmt.id as TextElement['textType'],
+                              textFormatType: becomesParagraph ? 'paragraph' : 'single-line',
+                              multiline: becomesParagraph,
+                              wordWrap: becomesParagraph,
+                              wrap: becomesParagraph,
+                            });
+                            return;
+                          }
                           updateDraft({
-                            textFormatType: fmt.id as any,
+                            textFormatType: fmt.id === 'arc' ? 'arc' : fmt.id === 'multi-line' || fmt.id === 'paragraph' ? 'paragraph' : 'single-line',
                             textType: fmt.id as any,
-                            multiline: fmt.id === 'paragraph',
-                            wordWrap: fmt.id === 'paragraph',
-                          })
-                        }
+                            multiline: fmt.id === 'paragraph' || fmt.id === 'multi-line' || fmt.id === 'word-processor' || fmt.id === 'rtf' || fmt.id === 'html' || fmt.id === 'xaml',
+                            wordWrap: fmt.id === 'multi-line' || fmt.id === 'paragraph',
+                            autoHeight: false,
+                          });
+                        }}
                         className="accent-[#0078d7]"
                       />
                       <span>{fmt.label}</span>
@@ -860,6 +1178,8 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                 {/* Sub Tabs: Auto Size, Tabs, Effects, Arc */}
                 <div className="border border-[#cbd5e1] rounded p-3 bg-[#f8fafc] space-y-3">
                   <div className="flex border-b border-[#cbd5e1] pb-1.5 gap-4 text-[11.5px]">
+                    <button type="button" onClick={() => setFormatSubTab('general')}
+                      className={`font-medium pb-0.5 cursor-pointer ${formatSubTab === 'general' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-600'}`}>General</button>
                     <button
                       type="button"
                       onClick={() => setFormatSubTab('autosize')}
@@ -882,6 +1202,8 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                     >
                       Tabs
                     </button>
+                    <button type="button" onClick={() => setFormatSubTab('spacing')}
+                      className={`font-medium pb-0.5 cursor-pointer ${formatSubTab === 'spacing' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-600'}`}>Spacing</button>
                     <button
                       type="button"
                       onClick={() => setFormatSubTab('effects')}
@@ -894,6 +1216,83 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                       Effects
                     </button>
                   </div>
+
+                  {formatSubTab === 'general' && (
+                    <div className="space-y-3 text-xs">
+                      <label className="flex items-center justify-between">Alignment:
+                        <select aria-label="Paragraph Alignment" value={draftElement.textAlign} onChange={event => updateDraft({ textAlign: event.target.value as TextElement['textAlign'] })}>
+                          <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center justify-between">Paragraph Width (mm):
+                        <input aria-label="Paragraph Width" type="number" min="0.1" step="0.1" value={draftElement.width}
+                          onChange={event => updateDraft({ width: Math.max(0.1, Number(event.target.value)), sizingMode: 'fixed-width', autoSize: false })} />
+                      </label>
+                      <label className="flex items-center justify-between">Indentation:
+                        <select aria-label="Indentation Mode" value={draftElement.indentationMode || 'none'} onChange={event => updateDraft({ indentationMode: event.target.value as TextElement['indentationMode'] })}>
+                          <option value="none">None</option><option value="first-line">First Line</option><option value="hanging">Hanging</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center justify-between">Indentation (mm):
+                        <input aria-label="Indentation Millimetres" type="number" min="0" step="0.1" value={draftElement.indentationMm ?? 0} onChange={event => updateDraft({ indentationMm: Math.max(0, Number(event.target.value)) })} />
+                      </label>
+                      <label className="flex items-center justify-between">Orphan Alignment:<select disabled aria-label="Orphan Alignment"><option>Disabled</option></select></label>
+                      {(draftElement.textType === 'paragraph' || draftElement.textFormatType === 'paragraph') && (
+                        <div className="border border-slate-300 bg-white h-36 overflow-hidden" aria-label="Paragraph Sample Preview"
+                          dangerouslySetInnerHTML={{ __html: (() => {
+                            const sourceRuns = evaluateTextElementRuns(draftElement, { record: currentRecord, datasets });
+                            const fit = isTextFitToBoxEnabled(draftElement)
+                              ? fitTextToBox(draftElement, draftElement.text, sourceRuns)
+                              : null;
+                            const runs = fit
+                              ? scaleTextRunsForFit(draftElement, sourceRuns, fit.fontSize, fit.fontWidthScale)
+                              : sourceRuns;
+                            const previewElement = fit
+                              ? { ...draftElement, fontSize: fit.fontSize, fontWidthScale: fit.fontWidthScale }
+                              : draftElement;
+                            const autoHeight = (draftElement.autoHeight ?? draftElement.autoSize === true) && !fit;
+                            const previewHeight = autoHeight
+                              ? measureTextObject({
+                                text: draftElement.text,
+                                runs,
+                                fontFamily: previewElement.fontFamily,
+                                fontSize: previewElement.fontSize,
+                                fontWeight: previewElement.fontWeight,
+                                fontStyle: previewElement.fontStyle,
+                                letterSpacing: previewElement.letterSpacing,
+                                lineHeight: previewElement.lineHeight,
+                                fontWidthScale: previewElement.fontWidthScale || 100,
+                                textType: 'paragraph',
+                                textFormatType: 'paragraph',
+                                multiline: true,
+                                wrap: draftElement.wrap !== false && draftElement.wordWrap !== false,
+                                containerWidthMm: draftElement.width,
+                                borderConfig: draftElement.borderConfig,
+                              }).height
+                              : draftElement.height;
+                            return getTextElementMarkup({ ...previewElement, textFormatType: fit ? 'paragraph' : draftElement.textFormatType, height: previewHeight, autoHeight },
+                              draftElement.text, runs) || '';
+                          })() }} />
+                      )}
+                    </div>
+                  )}
+                  {formatSubTab === 'tabs' && (
+                    <div className="space-y-3 text-xs">
+                      <label className="flex items-center justify-between">Default Tab Interval (mm):
+                        <input aria-label="Default Tab Interval" type="number" min="0.1" step="0.1" value={draftElement.defaultTabIntervalMm ?? 12.7}
+                          onChange={event => updateDraft({ defaultTabIntervalMm: Math.max(0.1, Number(event.target.value)) })} />
+                      </label>
+                      <label className="flex items-center justify-between">Tab Stops (mm):
+                        <input aria-label="Paragraph Tab Stops" value={(draftElement.tabStops || []).join(', ')}
+                          onChange={event => updateDraft({ tabStops: event.target.value.split(',').map(value => Number(value.trim())).filter(value => Number.isFinite(value) && value > 0) })} />
+                      </label>
+                    </div>
+                  )}
+                  {formatSubTab === 'spacing' && (
+                    <label className="flex items-center justify-between text-xs">Line Height:
+                      <input aria-label="Paragraph Line Height" type="number" min="0.5" step="0.05" value={draftElement.lineHeight} onChange={event => updateDraft({ lineHeight: Math.max(0.5, Number(event.target.value)) })} />
+                    </label>
+                  )}
 
                   {/* Arc Specific Configuration */}
                   {(draftElement.textFormatType === 'arc' || draftElement.textType === 'arc') && (
@@ -987,39 +1386,82 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
 
                   {formatSubTab === 'autosize' && (
                     <div className="space-y-3 text-[11.5px]">
+                      {(draftElement.textType === 'multi-line' || draftElement.textType === 'paragraph' || draftElement.textFormatType === 'paragraph') && (
+                        <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={draftElement.autoHeight ?? draftElement.autoSize === true}
+                            disabled={draftElement.sizingMode === 'fit-to-box' || draftElement.sizingMode === 'shrink-to-fit'}
+                            onChange={(e) => updateDraft({
+                              autoHeight: e.target.checked,
+                              sizingMode: 'fixed-width',
+                              autoSize: false,
+                              autoFit: false,
+                              autoSizeConfig: { ...draftElement.autoSizeConfig!, enabled: false },
+                            })}
+                            className="accent-[#0078d7]"
+                          />
+                          <span>Auto Height (Reflow Content)</span>
+                        </label>
+                      )}
+
                       <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
                         <input
                           type="checkbox"
-                          checked={draftElement.autoSize !== false}
+                          checked={draftElement.sizingMode === 'auto-width' || (!draftElement.sizingMode && draftElement.autoSize !== false)}
+                          disabled={draftElement.textType === 'multi-line' || draftElement.textType === 'paragraph' || draftElement.textFormatType === 'paragraph'}
                           onChange={(e) => {
                             const isChecked = e.target.checked;
                             updateDraft({
+                              sizingMode: isChecked ? 'auto-width' : 'fixed-width',
                               autoSize: isChecked,
                               autoFit: false,
-                              autoSizeConfig: { ...draftElement.autoSizeConfig!, enabled: isChecked },
+                              autoSizeConfig: { ...draftElement.autoSizeConfig!, enabled: false },
                             });
                           }}
                           className="accent-[#0078d7]"
                         />
-                        <span>Auto Size (Fit bounding box to rendered text content)</span>
+                        <span>Size Object to Content</span>
                       </label>
 
-                      <fieldset className="border border-[#cbd5e1] rounded p-2.5 space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
+                        <input
+                          type="checkbox"
+                          checked={draftElement.sizingMode === 'fit-to-box' || draftElement.sizingMode === 'shrink-to-fit'}
+                          onChange={(e) => updateDraft({
+                            sizingMode: e.target.checked ? 'fit-to-box' : 'fixed-width',
+                            autoSize: false,
+                            autoHeight: e.target.checked ? false : draftElement.autoHeight,
+                            autoFit: e.target.checked,
+                            autoSizeConfig: { ...draftElement.autoSizeConfig!, enabled: e.target.checked },
+                          })}
+                          className="accent-[#0078d7]"
+                        />
+                        <span>Auto Size</span>
+                      </label>
+
+                      <fieldset disabled={draftElement.sizingMode !== 'fit-to-box' && draftElement.sizingMode !== 'shrink-to-fit'} className="border border-[#cbd5e1] rounded p-2.5 space-y-2 disabled:opacity-50">
                         <legend className="text-[11px] font-semibold text-slate-700 px-1">Font Point Size Limits</legend>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="flex items-center justify-between">
                             <span className="text-slate-600">Minimum:</span>
                             <input
                               type="number"
+                              aria-label="Minimum Font Point Size"
                               min={1}
                               max={720}
-                              value={draftElement.autoSizeConfig?.minFontSize || 6}
-                              onChange={(e) =>
+                              step="any"
+                              value={draftElement.autoSizeConfig?.minFontSize ?? draftElement.minFontSize ?? 1}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                if (!Number.isFinite(value) || value < 1 || value > 720) return;
+                                const maxFontSize = Math.max(value, draftElement.autoSizeConfig?.maxFontSize ?? draftElement.maxFontSize ?? 720);
                                 updateDraft({
-                                  autoSizeConfig: { ...draftElement.autoSizeConfig!, minFontSize: parseFloat(e.target.value) || 6 },
-                                  minFontSize: parseFloat(e.target.value) || 6,
-                                })
-                              }
+                                  minFontSize: value,
+                                  maxFontSize,
+                                  autoSizeConfig: { ...draftElement.autoSizeConfig!, minFontSize: value, maxFontSize },
+                                });
+                              }}
                               className="w-20 border rounded px-1.5 py-0.5 bg-white text-right"
                             />
                           </div>
@@ -1027,18 +1469,100 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                             <span className="text-slate-600">Maximum:</span>
                             <input
                               type="number"
+                              aria-label="Maximum Font Point Size"
                               min={1}
                               max={720}
-                              value={draftElement.autoSizeConfig?.maxFontSize || 720}
-                              onChange={(e) =>
+                              step="any"
+                              value={draftElement.autoSizeConfig?.maxFontSize ?? draftElement.maxFontSize ?? 720}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                if (!Number.isFinite(value) || value < 1 || value > 720) return;
+                                const minFontSize = Math.min(value, draftElement.autoSizeConfig?.minFontSize ?? draftElement.minFontSize ?? 1);
                                 updateDraft({
-                                  autoSizeConfig: { ...draftElement.autoSizeConfig!, maxFontSize: parseFloat(e.target.value) || 720 },
-                                  maxFontSize: parseFloat(e.target.value) || 720,
-                                })
-                              }
+                                  minFontSize,
+                                  maxFontSize: value,
+                                  autoSizeConfig: { ...draftElement.autoSizeConfig!, minFontSize, maxFontSize: value },
+                                });
+                              }}
                               className="w-20 border rounded px-1.5 py-0.5 bg-white text-right"
                             />
                           </div>
+                        </div>
+                      </fieldset>
+
+                      <fieldset disabled={draftElement.sizingMode !== 'fit-to-box' && draftElement.sizingMode !== 'shrink-to-fit'} className="border border-[#cbd5e1] rounded p-2.5 space-y-2 disabled:opacity-50">
+                        <legend className="text-[11px] font-semibold text-slate-700 px-1">Font Width Scale</legend>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="flex items-center justify-between gap-2">
+                            <span className="text-slate-600">Minimum:</span>
+                            <input
+                              type="number"
+                              aria-label="Minimum Font Width Scale (%)"
+                              min={25}
+                              max={200}
+                              step={1}
+                              value={draftElement.autoSizeConfig?.minWidthScale ?? draftElement.minWidthScale ?? 100}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                if (!Number.isFinite(value) || value < 25 || value > 200) return;
+                                const maxWidthScale = Math.max(value, draftElement.autoSizeConfig?.maxWidthScale ?? draftElement.maxWidthScale ?? 100);
+                                updateDraft({
+                                  minWidthScale: value,
+                                  maxWidthScale,
+                                  autoSizeConfig: { ...draftElement.autoSizeConfig!, minWidthScale: value, maxWidthScale },
+                                });
+                              }}
+                              className="w-20 border rounded px-1.5 py-0.5 bg-white text-right"
+                            />
+                          </label>
+                          <label className="flex items-center justify-between gap-2">
+                            <span className="text-slate-600">Maximum:</span>
+                            <input
+                              type="number"
+                              aria-label="Maximum Font Width Scale (%)"
+                              min={25}
+                              max={200}
+                              step={1}
+                              value={draftElement.autoSizeConfig?.maxWidthScale ?? draftElement.maxWidthScale ?? 100}
+                              onChange={(e) => {
+                                const value = Number(e.target.value);
+                                if (!Number.isFinite(value) || value < 25 || value > 200) return;
+                                const minWidthScale = Math.min(value, draftElement.autoSizeConfig?.minWidthScale ?? draftElement.minWidthScale ?? 100);
+                                updateDraft({
+                                  minWidthScale,
+                                  maxWidthScale: value,
+                                  autoSizeConfig: { ...draftElement.autoSizeConfig!, minWidthScale, maxWidthScale: value },
+                                });
+                              }}
+                              className="w-20 border rounded px-1.5 py-0.5 bg-white text-right"
+                            />
+                          </label>
+                        </div>
+                      </fieldset>
+
+                      <fieldset disabled={draftElement.sizingMode !== 'fit-to-box' && draftElement.sizingMode !== 'shrink-to-fit'} className="border border-[#cbd5e1] rounded p-2.5 disabled:opacity-50">
+                        <legend className="text-[11px] font-semibold text-slate-700 px-1">Object Size (mm)</legend>
+                        <div className="grid grid-cols-2 gap-3">
+                          {(['width', 'height'] as const).map((dimension) => (
+                            <label key={dimension} className="flex items-center justify-between gap-2">
+                              <span>{dimension === 'width' ? 'Width:' : 'Height:'}</span>
+                              <input
+                                type="number"
+                                aria-label={`Auto Size Object ${dimension === 'width' ? 'Width' : 'Height'}`}
+                                min={0.1}
+                                step={0.1}
+                                value={draftElement[dimension]}
+                                onChange={(e) => {
+                                  const size = Number(e.target.value);
+                                  if (Number.isFinite(size) && size > 0) updateDraft({
+                                    [dimension]: size,
+                                    autoSizeConfig: { ...draftElement.autoSizeConfig!, [dimension === 'width' ? 'objectWidth' : 'objectHeight']: size },
+                                  });
+                                }}
+                                className="w-20 border rounded px-1.5 py-0.5 bg-white text-right"
+                              />
+                            </label>
+                          ))}
                         </div>
                       </fieldset>
 
@@ -1059,7 +1583,12 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                                 <button
                                   key={al.id}
                                   type="button"
-                                  onClick={() => updateDraft({ textAlign: al.id as any, horizontalAlignment: al.id as any })}
+                                  aria-label={`Horizontal alignment ${al.id}`}
+                                  onClick={() => updateDraft({
+                                    textAlign: al.id as any,
+                                    horizontalAlignment: al.id as any,
+                                    autoSizeConfig: { ...draftElement.autoSizeConfig!, horizontalAlignment: al.id as any },
+                                  })}
                                   className={`flex-1 py-1 flex items-center justify-center rounded-xs cursor-pointer ${
                                     isCur ? 'bg-[#0078d7] text-white' : 'hover:bg-slate-100 text-slate-700'
                                   }`}
@@ -1075,7 +1604,11 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                           <label className="text-slate-600 block mb-1">Vertical Alignment:</label>
                           <select
                             value={draftElement.verticalAlign || 'top'}
-                            onChange={(e) => updateDraft({ verticalAlign: e.target.value as any, verticalAlignment: e.target.value as any })}
+                            onChange={(e) => updateDraft({
+                              verticalAlign: e.target.value as any,
+                              verticalAlignment: e.target.value as any,
+                              autoSizeConfig: { ...draftElement.autoSizeConfig!, verticalAlignment: e.target.value as any },
+                            })}
                             className="w-full border border-[#cbd5e1] rounded px-2 py-1 bg-white"
                           >
                             <option value="top">Top</option>
@@ -1478,7 +2011,10 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                 </p>
 
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded font-mono text-[12px] text-slate-900 font-semibold">
-                  Result: <span className="text-emerald-700">{draftElement.text}</span>
+                  <span className="text-slate-500 font-sans font-normal text-xs block mb-1">Composite Output (All Sources):</span>
+                  <div className="text-emerald-700 whitespace-pre-wrap">
+                    {getMultiLineLayoutValue(draftElement.text || '') || <span className="text-slate-400 italic font-sans">(Empty)</span>}
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -1496,10 +2032,10 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
                           {idx + 1}
                         </span>
                         <div>
-                          <p className="font-semibold text-slate-900">{ds.name || `Source ${idx + 1}`}</p>
+                          <p className="font-semibold text-slate-900">{getDataSourceDisplayPreview(ds) || ds.name || `Source ${idx + 1}`}</p>
                           <p className="text-[11px] text-slate-500">
                             Type: <span className="capitalize font-medium">{ds.type}</span> | Value:{' '}
-                            <span className="font-mono text-blue-700">{ds.value || '(Empty)'}</span>
+                            <span className="font-mono text-blue-700">{getDataSourceDisplayPreview(ds) || '(Empty)'}</span>
                           </p>
                         </div>
                       </div>
@@ -1536,148 +2072,26 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
 
                 {/* Sub-Tab 1: Source */}
                 {activeDsTab === 'source' && (
-                  <div className="space-y-3.5 pt-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <label className="w-24 text-slate-600 font-medium">Source Type:</label>
-                      <select
-                        value={activeDataSource.type}
-                        onChange={(e) => updateActiveDs({ type: e.target.value as any })}
-                        className="flex-1 border border-[#cbd5e1] rounded px-2 py-1 text-[11.5px] bg-white font-medium"
-                      >
-                        <option value="embedded">Embedded Data</option>
-                        <option value="database-field">Database Field</option>
-                        <option value="variable">Named Data Source / Variable</option>
-                        <option value="clock">Date / Time (Clock)</option>
-                        <option value="formula">Formula Expression</option>
-                        <option value="serial">Serialization / Counter</option>
-                        <option value="system">System Variable</option>
-                        <option value="script">Script Engine</option>
-                      </select>
-                    </div>
-
-                    {/* Source Specific Editor */}
-                    {activeDataSource.type === 'embedded' && (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-slate-600 font-medium">Embedded Text Value:</label>
-                          <button
-                            type="button"
-                            title="Insert Symbols or Special Characters"
-                            onClick={() => setIsSpecialCharModalOpen(true)}
-                            className="px-2 py-0.5 bg-[#f8fafc] hover:bg-[#e2e8f0] active:bg-[#cbd5e1] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-sm cursor-pointer shadow-2xs flex items-center gap-1"
-                          >
-                            <span>Ω</span>
-                            <span className="text-[10.5px] font-sans font-normal text-slate-700">Special Characters...</span>
-                          </button>
-                        </div>
-                        <div className="flex items-start gap-2">
-                          <textarea
-                            ref={embeddedTextareaRef}
-                            rows={4}
-                            value={activeDataSource.value || ''}
-                            onChange={(e) => updateActiveDs({ value: e.target.value })}
-                            className="flex-1 border border-[#cbd5e1] rounded p-2 text-[12px] font-mono focus:outline-[#0078d7]"
-                            placeholder="Enter embedded text value..."
-                          />
-                          <button
-                            type="button"
-                            title="Insert Symbols or Special Characters"
-                            onClick={() => setIsSpecialCharModalOpen(true)}
-                            className="w-8 h-8 self-stretch bg-[#f8fafc] hover:bg-[#e2e8f0] active:bg-[#cbd5e1] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-lg cursor-pointer shadow-2xs flex items-center justify-center shrink-0"
-                          >
-                            Ω
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {activeDataSource.type === 'database-field' && (
-                      <DatabaseFieldSourceConfig
-                        dataSource={activeDataSource}
-                        onUpdate={updateActiveDs}
-                        datasets={datasets}
-                        currentRecord={currentRecord}
-                        currentConnection={currentConnection}
-                        onConnectDatasetToTemplate={onConnectDataset}
-                      />
-                    )}
-
-                    {activeDataSource.type === 'clock' && (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <label className="w-24 text-slate-600">Date Format:</label>
-                          <input
-                            type="text"
-                            value={activeDataSource.dateFormat || 'YYYY-MM-DD'}
-                            onChange={(e) => updateActiveDs({ dateFormat: e.target.value })}
-                            className="flex-1 border rounded px-2 py-1 font-mono text-[11.5px]"
-                          />
-                        </div>
-                        <div className="grid grid-cols-3 gap-3">
-                          <div>
-                            <label className="text-[11px] text-slate-500">Offset Days:</label>
-                            <input
-                              type="number"
-                              value={activeDataSource.dateOffsetDays || 0}
-                              onChange={(e) => updateActiveDs({ dateOffsetDays: parseInt(e.target.value, 10) || 0 })}
-                              className="w-full border rounded px-1.5 py-0.5"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-slate-500">Offset Months:</label>
-                            <input
-                              type="number"
-                              value={activeDataSource.dateOffsetMonths || 0}
-                              onChange={(e) => updateActiveDs({ dateOffsetMonths: parseInt(e.target.value, 10) || 0 })}
-                              className="w-full border rounded px-1.5 py-0.5"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-slate-500">Offset Years:</label>
-                            <input
-                              type="number"
-                              value={activeDataSource.dateOffsetYears || 0}
-                              onChange={(e) => updateActiveDs({ dateOffsetYears: parseInt(e.target.value, 10) || 0 })}
-                              className="w-full border rounded px-1.5 py-0.5"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {activeDataSource.type === 'formula' && (
-                      <div className="space-y-1.5">
-                        <label className="text-slate-600 font-medium">Formula Expression (e.g. [Price] * 1.18):</label>
-                        <input
-                          type="text"
-                          value={activeDataSource.formulaExpression || activeDataSource.value || ''}
-                          onChange={(e) => updateActiveDs({ formulaExpression: e.target.value, value: e.target.value })}
-                          placeholder="e.g. [Price] * [Quantity]"
-                          className="w-full border border-[#cbd5e1] rounded px-2 py-1.5 font-mono text-[12px]"
-                        />
-                      </div>
-                    )}
-
-                    {activeDataSource.type === 'system' && (
-                      <div className="flex items-center justify-between gap-3">
-                        <label className="w-24 text-slate-600">System Field:</label>
-                        <select
-                          value={activeDataSource.systemVarName || 'SYSTEM.DATE'}
-                          onChange={(e) => updateActiveDs({ systemVarName: e.target.value as any })}
-                          className="flex-1 border border-[#cbd5e1] rounded px-2 py-1 bg-white"
-                        >
-                          <option value="SYSTEM.DATE">Current Date</option>
-                          <option value="SYSTEM.TIME">Current Time</option>
-                          <option value="SYSTEM.USER">Logged-in User</option>
-                          <option value="SYSTEM.PRINTER">Active Printer</option>
-                          <option value="SYSTEM.JOB_ID">Job Identifier</option>
-                          <option value="SYSTEM.PAGE_NUMBER">Page Number</option>
-                          <option value="SYSTEM.TOTAL_PAGES">Total Pages</option>
-                          <option value="SYSTEM.RECORD_NUMBER">Current Record Number</option>
-                          <option value="SYSTEM.TOTAL_RECORDS">Total Database Records</option>
-                        </select>
-                      </div>
-                    )}
+                  <div className="pt-2">
+                    <ProfessionalDataSourceConfig
+                      dataSource={activeDataSource}
+                      onUpdate={updateActiveDs}
+                      datasets={datasets}
+                      currentRecord={currentRecord}
+                      currentConnection={currentConnection}
+                      onConnectDataset={onConnectDataset}
+                      namedDataSources={namedDataSources}
+                      calculatedFields={calculatedFields}
+                      availableVariables={availableVariables as any}
+                      elements={elements}
+                      globalData={globalData}
+                      currentRecordIndex={currentRecordIndex}
+                      totalRecords={totalRecords}
+                      onOpenSpecialCharacters={handleOpenSpecialCharacters}
+                      onOpenScriptEditor={() => setIsScriptEditorOpen(true)}
+                      embeddedValueRef={embeddedTextareaRef}
+                      onSelectionChange={handleSelectionChange}
+                    />
                   </div>
                 )}
 
@@ -1905,6 +2319,7 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
           title="Script Transform Engine"
           onClose={() => setActiveTransformModal(null)}
           initial={activeDataSource.transformConfig?.script}
+          sampleRecord={currentRecord}
           onApply={(up) => updateActiveDs({ transformConfig: { ...activeDataSource.transformConfig, ...up } })}
         />
       )}
@@ -1934,7 +2349,53 @@ export const TextPropertiesModal: React.FC<TextPropertiesModalProps> = ({
         onClose={() => setIsSpecialCharModalOpen(false)}
         onInsert={handleInsertSpecialChar}
         currentFont={draftElement?.fontFamily || 'Arial'}
+        defaultTab={specialCharModalTab}
       />
+
+      {/* Font per Data Source Modal */}
+      {draftElement && (
+        <DataSourceFontsModal
+          isOpen={isDataSourceFontsModalOpen}
+          onClose={() => setIsDataSourceFontsModalOpen(false)}
+          element={draftElement}
+          onUpdateElement={(updates) => updateDraft(updates)}
+          systemFonts={systemFonts}
+        />
+      )}
+
+      {draftElement && scriptEditorTemplate && (
+        <ScriptEditorModal
+          isOpen={isScriptEditorOpen}
+          onClose={() => setIsScriptEditorOpen(false)}
+          template={scriptEditorTemplate}
+          onUpdateTemplate={(updated) => {
+            const updatedElement = updated.elements.find((item) => item.id === draftElement.id);
+            if (updatedElement?.type === 'text') {
+              const evaluationContext = {
+                record: currentRecord,
+                datasets,
+                namedDataSources,
+                calculatedFields,
+                elements: updated.elements,
+                currentRecordIndex,
+                totalRecords,
+                globalData,
+              };
+              const updatedDataSources = (updatedElement.dataSources || []).map((source, index) =>
+                source.type === 'script'
+                  ? { ...source, value: evaluateDataSourceItem(source, evaluationContext, index) }
+                  : source
+              );
+              updateDraft({ dataSources: updatedDataSources });
+            }
+          }}
+          selectedObjectId={draftElement.id}
+          selectedDataSourceId={activeDataSource.id}
+          currentRecord={currentRecord}
+          currentRecordIndex={currentRecordIndex}
+          totalRecords={totalRecords}
+        />
+      )}
     </div>
   );
 };

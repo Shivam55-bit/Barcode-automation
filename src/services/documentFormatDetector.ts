@@ -49,6 +49,30 @@ export function detectDocumentFormat(
 
   // 2. Buffer/Binary Magic Inspection (if content provided)
   if (contentOrBuffer) {
+    if (typeof contentOrBuffer === 'object' && typeof (contentOrBuffer as any).slice !== 'function') {
+      const obj = contentOrBuffer as any;
+      if (obj.format === 'BarcodeFlowDocument' || obj.format === 'BarTenderDocument' || ext === '.bfl') {
+        return {
+          format: 'BARCODEFLOW_NATIVE',
+          extension: ext || '.bfl',
+          filePath: normalizedPath,
+          isBinary: false,
+          canParseDirectlyAsJson: true,
+          details: 'Native BarcodeFlow Document Object',
+        };
+      }
+      if (obj.elements || ext === '.json') {
+        return {
+          format: 'JSON',
+          extension: ext || '.json',
+          filePath: normalizedPath,
+          isBinary: false,
+          canParseDirectlyAsJson: true,
+          details: 'BarcodeFlow Template JSON Object',
+        };
+      }
+    }
+
     let isBinary = false;
     let headerStr = '';
 
@@ -62,7 +86,7 @@ export function detectDocumentFormat(
           break;
         }
       }
-    } else {
+    } else if (contentOrBuffer && typeof contentOrBuffer.slice === 'function') {
       const len = Math.min(contentOrBuffer.length, 128);
       const buf = Buffer.from(contentOrBuffer.slice(0, len));
       headerStr = buf.toString('utf-8', 0, len);
@@ -95,13 +119,8 @@ export function detectDocumentFormat(
       }
     }
 
-    // Check if header starts with 'BarTender' or 'Bar Tender' or Seagull
-    if (
-      headerStr.includes('BarTender') ||
-      headerStr.includes('Bar Tender') ||
-      headerStr.includes('Seagull:BarTender') ||
-      headerStr.includes('Seagull Scientific')
-    ) {
+    // Check the verified BTW file signature, not strings inside JSON metadata.
+    if (/^\s*Bar Tender Format File(?:\s|$)/.test(headerStr)) {
       return {
         format: 'BARTENDER_BTW',
         extension: ext || '.btw',

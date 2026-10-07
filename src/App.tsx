@@ -11,6 +11,8 @@ import {
   UserProfile,
   BarcodeSymbology,
   TextObjectType,
+  TextSizingMode,
+  ArcConfig,
   TemplateStatus,
   VariableDefinition,
   DpiOption,
@@ -26,7 +28,11 @@ import { PrinterModel } from './printer/types';
 import { advanceTemplateSerialState, AtomicSerialReservationService } from './services/serializationEngine';
 import { SerializationRecoveryModal } from './components/dialogs/SerializationRecoveryModal';
 import { measureTextObject, recalculateTextElementDimensions } from './services/textMeasurementEngine';
-import { evaluateElementData } from './services/dataSourceEngine';
+import { evaluateElementData, evaluateTextElementRuns } from './services/dataSourceEngine';
+import { buildVisibleRecordSet } from './services/recordSetEngine';
+import { resolveCalculatedFields } from './services/calculatedFieldEngine';
+import { MAX_VIEW_ZOOM, MIN_VIEW_ZOOM } from './services/viewportGeometry';
+import { calculateBarcodeLayout, getBarcodeSymbolHeight, getSymbologyMetadata } from './services/barcodeEngine';
 import { PrintPreviewWorkspace } from './components/views/PrintPreviewWorkspace';
 import { MenuBar } from './components/menu/MenuBar';
 import { ObjectToolbar } from './components/toolbar/ObjectToolbar';
@@ -80,8 +86,14 @@ import { RecordBrowserModal } from './components/dialogs/RecordBrowserModal';
 import { NewDocumentWizardModal } from './components/wizard/NewDocumentWizardModal';
 import { PrinterManagerModal } from './components/dialogs/PrinterManagerModal';
 import { WelcomeModal } from './components/dialogs/WelcomeModal';
+import { DocumentRecoveryModal } from './components/dialogs/DocumentRecoveryModal';
 import { BarTenderImportModal } from './components/dialogs/BarTenderImportModal';
-import { detectDocumentFormat } from './services/documentFormatDetector';
+import { BarTenderImportReportModal } from './components/dialogs/BarTenderImportReportModal';
+import { DocumentImportProgressModal, DocumentImportState } from './components/dialogs/DocumentImportProgressModal';
+import { ScriptEditorModal } from './components/dialogs/ScriptEditorModal';
+import { RichTextEditorModal } from './components/dialogs/RichTextEditorModal';
+import { SpecialCharacterModal } from './components/dialogs/SpecialCharacterModal';
+import { documentEventDispatcher } from './services/documentEventDispatcher';
 
 import { exportLabelsToPDF } from './services/pdfExportService';
 import { promptSavePdfFile } from './services/fileSavePromptService';
@@ -93,6 +105,7 @@ import { apiService } from './services/apiService';
 import { setGlobalDatasets } from './services/dataSourceEngine';
 import {
   serializeBarcodeFlowDocument,
+  serializePortableBarcodeFlowDocument,
   deserializeBarcodeFlowDocument,
   promptNativeSaveAsDialog,
   saveDocumentToDisk,
@@ -101,13 +114,31 @@ import {
   checkFileExistsOnDisk,
   exitDesktopApplication,
   getRecentDocuments,
+  syncRecentDocumentsFromDisk,
   addRecentDocument,
   removeRecentDocument,
   clearRecentDocuments,
+  getAppStartupSettings,
+  saveAppStartupSettings,
+  normalizeWindowsPath,
+  areWindowsPathsEqual,
 } from './services/documentFileService';
 import { excelDataSourceProvider } from './services/providers/ExcelDataSourceProvider';
 import { RecentDocumentEntry } from './types';
 import { ZoomIn, ZoomOut, Maximize2, ShieldCheck, ChevronLeft, ChevronRight, CheckCircle2, AlertTriangle } from 'lucide-react';
+
+const STARTUP_TEMPLATE: LabelTemplate = {
+  ...INITIAL_TEMPLATES[0],
+  id: 'tmpl-startup-empty',
+  name: 'Document1',
+  status: 'draft',
+  tags: ['Draft'],
+  elements: [],
+  variables: [],
+  sampleRecords: [{}],
+};
+
+const hasUnsavedDocumentChanges = (doc: OpenDocument): boolean => doc.isDirty || doc.isNew;
 
 export default function App() {
   // --- STATE ---
@@ -134,11 +165,11 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (parsed.user && parsed.user.email?.toLowerCase() !== 'shivam@gmail.com' && parsed.user.role !== 'Super Admin') {
           const personal = getUserPersonalizedTemplates(parsed.user);
-          return [...personal, ...INITIAL_TEMPLATES];
+          return [...personal, STARTUP_TEMPLATE, ...INITIAL_TEMPLATES];
         }
       }
     } catch { }
-    return INITIAL_TEMPLATES;
+    return [STARTUP_TEMPLATE, ...INITIAL_TEMPLATES];
   });
 
   const [currentTemplateId, setCurrentTemplateId] = useState<string>(() => {
@@ -152,12 +183,12 @@ export default function App() {
         }
       }
     } catch { }
-    return INITIAL_TEMPLATES[0].id;
+    return STARTUP_TEMPLATE.id;
   });
 
   const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
   const [activeTool, setActiveTool] = useState<
-    'select' | 'data-edit' | 'text' | 'barcode' | 'qr' | 'datamatrix' | 'rect' | 'circle' | 'line' | 'table' | 'image'
+    'select' | 'data-edit' | 'text' | 'barcode' | 'qr' | 'datamatrix' | 'rect' | 'circle' | 'line' | 'table' | 'image' | 'zoom-rect'
   >('select');
   const [isDataEditOpen, setIsDataEditOpen] = useState<boolean>(false);
   const [dataEditTargetElement, setDataEditTargetElement] = useState<LabelElement | null>(null);
@@ -165,18 +196,7 @@ export default function App() {
 
   const [activeView, setActiveView] = useState<
     'designer' | 'dashboard' | 'queue' | 'workflow' | 'viewer' | 'datasets' | 'license' | 'software-download' | 'super-admin'
-  >(() => {
-    try {
-      const saved = localStorage.getItem('barcodeflow_auth_session');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.user?.role === 'Super Admin' || parsed.user?.email?.toLowerCase() === 'superadmin@gmail.com') {
-          return 'super-admin';
-        }
-      }
-    } catch { }
-    return 'designer';
-  });
+  >('designer');
   const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState<boolean>(false);
 
   // Central Printer State (Live Windows Discovery + Universal State)
@@ -243,9 +263,9 @@ export default function App() {
       setPrinterOverrides(updater);
     }
   }, []);
-  const [printJobs, setPrintJobs] = useState<PrintJob[]>(INITIAL_PRINT_JOBS);
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
-  const [batchJobs, setBatchJobs] = useState<any[]>(INITIAL_BATCH_JOBS);
+  const [printJobs, setPrintJobs] = useState<PrintJob[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [batchJobs, setBatchJobs] = useState<any[]>([]);
   const [datasets, setDatasets] = useState<any[]>([]);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     try {
@@ -255,7 +275,7 @@ export default function App() {
         return parsed.authenticated === true && !!parsed.user;
       }
     } catch { }
-    return false; // Show login screen on fresh session
+    return true;
   });
 
   // Viewport & Canvas Settings
@@ -284,7 +304,13 @@ export default function App() {
   // Undo / Redo History
   const [history, setHistory] = useState<LabelElement[][]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
-  const isUndoRedoAction = useRef(false);
+  const historyRef = useRef(history);
+  const historyIndexRef = useRef(historyIndex);
+
+  useEffect(() => {
+    historyRef.current = history;
+    historyIndexRef.current = historyIndex;
+  }, [history, historyIndex]);
 
   // Modals state
   const [isBarcodePickerOpen, setIsBarcodePickerOpen] = useState(false);
@@ -319,9 +345,14 @@ export default function App() {
   const [isNewDocWizardOpen, setIsNewDocWizardOpen] = useState(false);
   const [isPrinterManagerOpen, setIsPrinterManagerOpen] = useState(false);
   const [isTextPropertiesOpen, setIsTextPropertiesOpen] = useState(false);
+  const [isRichTextModalOpen, setIsRichTextModalOpen] = useState(false);
+  const [richTextTargetElement, setRichTextTargetElement] = useState<TextElement | null>(null);
+  const [isSymbolPickerOpen, setIsSymbolPickerOpen] = useState(false);
+  const [symbolTargetElement, setSymbolTargetElement] = useState<TextElement | null>(null);
   const [isShapePropertiesOpen, setIsShapePropertiesOpen] = useState(false);
   const [isNamedDataSourcesOpen, setIsNamedDataSourcesOpen] = useState(false);
   const [isDocumentScriptsOpen, setIsDocumentScriptsOpen] = useState(false);
+  const [isScriptEditorOpen, setIsScriptEditorOpen] = useState(false);
   const [isFormulaBuilderOpen, setIsFormulaBuilderOpen] = useState(false);
   const [isDataEntryDesignerOpen, setIsDataEntryDesignerOpen] = useState(false);
   const [isDataEntryRuntimeOpen, setIsDataEntryRuntimeOpen] = useState(false);
@@ -330,6 +361,18 @@ export default function App() {
   const [isSerializationRecoveryModalOpen, setIsSerializationRecoveryModalOpen] = useState(false);
   const [orphanReservationsCount, setOrphanReservationsCount] = useState<number>(0);
   const [selectedRecordIndices, setSelectedRecordIndices] = useState<number[]>([]);
+  const [btwImportReport, setBtwImportReport] = useState<any>(null);
+  const [isBtwImportReportOpen, setIsBtwImportReportOpen] = useState(false);
+  const [importState, setImportState] = useState<DocumentImportState>('IDLE');
+  const [importFileName, setImportFileName] = useState<string>('');
+  const [importErrorMessage, setImportErrorMessage] = useState<string>('');
+  const [importStats, setImportStats] = useState<{
+    totalDiscovered?: number;
+    fullyEditable?: number;
+    barcodes?: number;
+    text?: number;
+    lines?: number;
+  } | undefined>(undefined);
 
   // Startup: Scan for orphan/uncommitted serialization reservations
   useEffect(() => {
@@ -361,27 +404,45 @@ export default function App() {
     }
   });
 
-  const [isWelcomeOpen, setIsWelcomeOpen] = useState<boolean>(() => {
-    try {
-      const savedAuth = localStorage.getItem('barcodeflow_auth_session');
-      const isAuth = savedAuth ? JSON.parse(savedAuth)?.authenticated === true : false;
-      const val = localStorage.getItem('barcodeflow.showWelcomeOnStartup');
-      const shouldShow = val === null ? true : val === 'true';
-      return isAuth && shouldShow;
-    } catch {
-      return false;
-    }
-  });
+  const [isWelcomeOpen, setIsWelcomeOpen] = useState(false);
+  const [recoverySnapshot, setRecoverySnapshot] = useState<any | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | undefined>();
+  const [isRecoveryPromptOpen, setIsRecoveryPromptOpen] = useState(false);
+  const startupDocumentRequestedRef = useRef(false);
+  const recoveryLoadedRef = useRef(false);
+  const recoveryActiveRef = useRef(false);
+  const pendingStartupPathsRef = useRef<string[]>([]);
+  const pendingWelcomeRef = useRef(false);
 
-  const handleToggleShowWelcomeOnStartup = useCallback((enabled: boolean) => {
+  const handleToggleShowWelcomeOnStartup = useCallback(async (enabled: boolean) => {
     setShowWelcomeOnStartup(enabled);
-    try {
-      localStorage.setItem('barcodeflow.showWelcomeOnStartup', String(enabled));
-    } catch { }
+    await saveAppStartupSettings({ showWelcomeOnStartup: enabled });
+  }, []);
+
+  // Synchronize Recent Documents & App Settings from persistent Electron disk storage on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const syncedRecent = await syncRecentDocumentsFromDisk();
+        if (syncedRecent && syncedRecent.length > 0) {
+          setRecentDocuments(syncedRecent);
+        }
+      } catch (err) {
+        console.warn('Recent documents sync warning:', err);
+      }
+      try {
+        const settings = await getAppStartupSettings();
+        if (typeof settings.showWelcomeOnStartup === 'boolean') {
+          setShowWelcomeOnStartup(settings.showWelcomeOnStartup);
+        }
+      } catch (err) {
+        console.warn('Startup settings sync warning:', err);
+      }
+    })();
   }, []);
 
   const [openDocuments, setOpenDocuments] = useState<OpenDocument[]>(() => {
-    const initTpl = INITIAL_TEMPLATES[0];
+    const initTpl = STARTUP_TEMPLATE;
     return [
       {
         instanceId: `doc-${Date.now()}-1`,
@@ -398,6 +459,8 @@ export default function App() {
       },
     ];
   });
+  const openDocumentsRef = useRef(openDocuments);
+  openDocumentsRef.current = openDocuments;
 
   const [activeDocumentInstanceId, setActiveDocumentInstanceId] = useState<string>(() => {
     return openDocuments[0]?.instanceId || '';
@@ -405,17 +468,41 @@ export default function App() {
 
   const [unsavedDocModal, setUnsavedDocModal] = useState<{
     isOpen: boolean;
-    instanceId: string;
-    documentName: string;
-    action: 'close' | 'closeAll' | 'closeOthers';
+    instanceId?: string;
+    documentName?: string;
+    action: 'close' | 'closeAll' | 'closeOthers' | 'new' | 'open' | 'openRecent';
+    targetPath?: string;
   } | null>(null);
   const [isSaveAsModalOpen, setIsSaveAsModalOpen] = useState(false);
   const [recentDocuments, setRecentDocuments] = useState<RecentDocumentEntry[]>(() => getRecentDocuments());
 
+  useEffect(() => {
+    (window as any).electronAPI?.setDocumentDirty?.(openDocuments.some(hasUnsavedDocumentChanges));
+  }, [openDocuments]);
+
+  useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.onCloseRequest) return;
+    return electronAPI.onCloseRequest(() => {
+      const dirtyDocuments = openDocumentsRef.current.filter(hasUnsavedDocumentChanges);
+      if (dirtyDocuments.length === 0) {
+        void electronAPI.confirmCloseWindow?.();
+        return;
+      }
+      setUnsavedDocModal({
+        isOpen: true,
+        instanceId: dirtyDocuments[0].instanceId,
+        documentName: dirtyDocuments.length === 1 ? dirtyDocuments[0].name : `${dirtyDocuments.length} open documents`,
+        action: 'closeAll',
+      });
+    });
+  }, []);
+
   // Application exit warning for dirty documents
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      const hasDirty = openDocuments.some((d) => d.isDirty);
+      if ((window as any).electronAPI?.isElectron) return;
+      const hasDirty = openDocuments.some(hasUnsavedDocumentChanges);
       if (hasDirty) {
         e.preventDefault();
         e.returnValue = 'You have unsaved changes in open documents. Are you sure you want to exit?';
@@ -464,19 +551,20 @@ export default function App() {
   // Push state to history for undo/redo
   const pushHistory = useCallback(
     (elements: LabelElement[]) => {
-      if (isUndoRedoAction.current) {
-        isUndoRedoAction.current = false;
-        return;
-      }
-      setHistory((prev) => {
-        const next = prev.slice(0, historyIndex + 1);
-        next.push(JSON.parse(JSON.stringify(elements)));
-        if (next.length > 40) next.shift();
-        return next;
-      });
-      setHistoryIndex((prev) => Math.min(prev + 1, 39));
+      const nextSnapshot = JSON.stringify(elements);
+      const currentHistory = historyRef.current;
+      const currentIndex = historyIndexRef.current;
+      if (currentIndex >= 0 && JSON.stringify(currentHistory[currentIndex]) === nextSnapshot) return;
+      const next = currentHistory.slice(0, currentIndex + 1);
+      next.push(JSON.parse(nextSnapshot));
+      if (next.length > 40) next.shift();
+      const nextIndex = Math.min(currentIndex + 1, 39);
+      historyRef.current = next;
+      historyIndexRef.current = nextIndex;
+      setHistory(next);
+      setHistoryIndex(nextIndex);
     },
-    [historyIndex]
+    []
   );
 
   // Load persistent data from Backend API on mount
@@ -560,12 +648,14 @@ export default function App() {
       setActivePrinter(exactMatch);
     } else if (availablePrinters.length > 0) {
       // Do NOT silently switch to first printer
-      setMissingPrinterModal({
-        isOpen: true,
-        templatePrinterName: preferred.name || preferred.systemName || 'Unknown Printer',
-      });
+      if (!isBtwImportReportOpen) {
+        setMissingPrinterModal({
+          isOpen: true,
+          templatePrinterName: preferred.name || preferred.systemName || 'Unknown Printer',
+        });
+      }
     }
-  }, [currentTemplate?.id, currentTemplate?.printer, availablePrinters, printersLoading, setActivePrinter]);
+  }, [currentTemplate?.id, currentTemplate?.printer, availablePrinters, printersLoading, setActivePrinter, isBtwImportReportOpen]);
 
   // Append audit trail log (synced with Backend API)
   const logAction = (action: AuditLogEntry['action'], details: string) => {
@@ -596,10 +686,12 @@ export default function App() {
   };
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const latestElementUpdatesRef = useRef<{ instanceId: string | null; elements: LabelElement[] } | null>(null);
 
   // Update Template Properties with Version Freeze Auto-Branching & Debounced Backend Disk Sync
   const updateTemplate = useCallback(
     (updates: Partial<LabelTemplate>) => {
+      if (updates.elements) latestElementUpdatesRef.current = { instanceId: activeDocumentInstanceId, elements: updates.elements };
       let templateToSync: LabelTemplate | null = null;
 
       setOpenDocuments((prev) => {
@@ -670,8 +762,17 @@ export default function App() {
     [updateTemplate, pushHistory]
   );
 
+  // Commit current template elements to undo history (e.g. after completed drag/resize/rotate)
+  const commitHistory = useCallback(() => {
+    if (currentTemplate && currentTemplate.elements) {
+      const latest = latestElementUpdatesRef.current;
+      pushHistory(latest?.instanceId === activeDocumentInstanceId ? latest.elements : currentTemplate.elements);
+      latestElementUpdatesRef.current = null;
+    }
+  }, [activeDocumentInstanceId, currentTemplate, pushHistory]);
+
   const updateSingleElement = useCallback(
-    (id: string, updates: Partial<LabelElement>) => {
+    (id: string, updates: Partial<LabelElement>, skipHistory?: boolean) => {
       const activeRecord =
         currentTemplate.databaseConnection?.records?.[viewport.previewRecordIndex] ||
         currentTemplate.sampleRecords?.[viewport.previewRecordIndex] ||
@@ -686,6 +787,30 @@ export default function App() {
         if (merged.type === 'barcode') {
           const barcodeEl = merged as BarcodeElement;
           const barcodeUpdates = updates as Partial<BarcodeElement>;
+
+          // Ensure persistent source of truth for barHeight in symbol model
+          const currentBarH = getBarcodeSymbolHeight(barcodeEl);
+          if (!barcodeEl.symbol) {
+            barcodeEl.symbol = {
+              barHeight: currentBarH,
+              moduleWidth: barcodeEl.barWidth || 1.5,
+            };
+          } else if (barcodeUpdates.barHeight !== undefined) {
+            barcodeEl.symbol.barHeight = barcodeUpdates.barHeight;
+          }
+
+          // If HRT font size changed without an explicit barHeight update:
+          // strictly preserve persistent barHeight and expand object height downward to layout.totalHeightMm
+          if (
+            (barcodeUpdates.humanReadableFontSize !== undefined ||
+              barcodeUpdates.fontSize !== undefined ||
+              barcodeUpdates.humanReadable?.fontSize !== undefined) &&
+            barcodeUpdates.barHeight === undefined
+          ) {
+            barcodeEl.barHeight = barcodeEl.symbol.barHeight || currentBarH;
+            const layout = calculateBarcodeLayout(barcodeEl);
+            barcodeEl.height = layout.totalHeightMm;
+          }
 
           // Case 1: Direct value update without explicit dataSources update
           if (barcodeUpdates.value !== undefined && barcodeUpdates.dataSources === undefined) {
@@ -773,49 +898,71 @@ export default function App() {
           }
 
           // If updates include explicit width or height without explicit autoSize setting,
-          // then manual resize takes effect and Auto Size is turned off.
+          // then manual resize takes effect and Auto Size is turned off, fixing width.
           if (
             (textUpdates.width !== undefined || textUpdates.height !== undefined) &&
             textUpdates.autoSize === undefined &&
-            textUpdates.autoFit === undefined
+            textUpdates.autoFit === undefined &&
+            textUpdates.sizingMode === undefined
           ) {
             textEl.autoSize = false;
             textEl.autoFit = false;
+            textEl.sizingMode = 'fixed-width';
             if (textEl.autoSizeConfig) {
               textEl.autoSizeConfig = { ...textEl.autoSizeConfig, enabled: false };
             }
           }
 
-          const isAutoSizeActive =
-            textEl.autoSize !== false &&
-            (textEl.autoSize === true ||
-              textEl.autoSizeConfig?.enabled === true ||
-              textEl.textType === 'single-line' ||
-              !textEl.textType ||
-              textEl.textFormatType === 'single-line');
+          const isMultiLine =
+            textEl.textType === 'multi-line' ||
+            textEl.textType === 'paragraph' ||
+            textEl.multiline ||
+            textEl.textFormatType === 'paragraph';
+          if (isMultiLine && textUpdates.width !== undefined) {
+            textEl.paragraphWidth = textUpdates.width;
+          }
 
-          if (isAutoSizeActive) {
+          // Multi-line has a user-controlled layout rectangle: it should NEVER auto-collapse.
+          // Single-line auto-sizes only if sizingMode is 'auto-width' (or autoSize is explicitly true and not fixed-width).
+          const isAutoSizeActive =
+            textEl.sizingMode === 'auto-width' ||
+            (!isMultiLine && !textEl.sizingMode && textEl.autoSize !== false);
+          const isDraftGeometryUpdate =
+            textUpdates.autoSize === true &&
+            Object.keys(textUpdates).every((key) => ['width', 'height', 'autoSize'].includes(key));
+
+          if (isAutoSizeActive && !isDraftGeometryUpdate) {
             const resolvedText = evaluateElementData(textEl, {
               record: activeRecord,
               datasets,
               variables: currentTemplate.variables,
             });
-            const dims = recalculateTextElementDimensions(textEl, resolvedText);
+            const dims = recalculateTextElementDimensions(
+              textEl,
+              resolvedText,
+              undefined,
+              evaluateTextElementRuns(textEl, { record: activeRecord, datasets, variables: currentTemplate.variables }),
+            );
             textEl.width = dims.width;
             textEl.height = dims.height;
             textEl.autoSize = true;
+            textEl.sizingMode = 'auto-width';
           }
         }
 
         return merged;
       });
-      updateElements(nextElements);
+      if (skipHistory) {
+        updateTemplate({ elements: nextElements });
+      } else {
+        updateElements(nextElements);
+      }
     },
-    [currentTemplate.elements, currentTemplate.variables, currentTemplate.databaseConnection, currentTemplate.sampleRecords, datasets, viewport.previewRecordIndex, updateElements]
+    [currentTemplate.elements, currentTemplate.variables, currentTemplate.databaseConnection, currentTemplate.sampleRecords, datasets, viewport.previewRecordIndex, updateElements, updateTemplate]
   );
 
   const updateMultipleElements = useCallback(
-    (updatesList: { id: string; updates: Partial<LabelElement> }[]) => {
+    (updatesList: { id: string; updates: Partial<LabelElement> }[], skipHistory?: boolean) => {
       const activeRecord =
         currentTemplate.databaseConnection?.records?.[viewport.previewRecordIndex] ||
         currentTemplate.sampleRecords?.[viewport.previewRecordIndex] ||
@@ -917,41 +1064,63 @@ export default function App() {
           if (
             (textUpdates.width !== undefined || textUpdates.height !== undefined) &&
             textUpdates.autoSize === undefined &&
-            textUpdates.autoFit === undefined
+            textUpdates.autoFit === undefined &&
+            textUpdates.sizingMode === undefined
           ) {
             textEl.autoSize = false;
             textEl.autoFit = false;
+            textEl.sizingMode = 'fixed-width';
             if (textEl.autoSizeConfig) {
               textEl.autoSizeConfig = { ...textEl.autoSizeConfig, enabled: false };
             }
           }
 
-          const isAutoSizeActive =
-            textEl.autoSize !== false &&
-            (textEl.autoSize === true ||
-              textEl.autoSizeConfig?.enabled === true ||
-              textEl.textType === 'single-line' ||
-              !textEl.textType ||
-              textEl.textFormatType === 'single-line');
+          const isMultiLine =
+            textEl.textType === 'multi-line' ||
+            textEl.textType === 'paragraph' ||
+            textEl.multiline ||
+            textEl.textFormatType === 'paragraph';
+          if (isMultiLine && textUpdates.width !== undefined) {
+            textEl.paragraphWidth = textUpdates.width;
+          }
 
-          if (isAutoSizeActive) {
+          const isAutoSizeActive =
+            !isMultiLine &&
+            textEl.sizingMode !== 'fixed-width' &&
+            (textEl.sizingMode === 'auto-width' ||
+              (textEl.autoSize !== false && (textEl.textType === 'single-line' || !textEl.textType)));
+          const isDraftGeometryUpdate =
+            textUpdates.autoSize === true &&
+            Object.keys(textUpdates).every((key) => ['width', 'height', 'autoSize'].includes(key));
+
+          if (isAutoSizeActive && !isDraftGeometryUpdate) {
             const resolvedText = evaluateElementData(textEl, {
               record: activeRecord,
               datasets,
               variables: currentTemplate.variables,
             });
-            const dims = recalculateTextElementDimensions(textEl, resolvedText);
+            const dims = recalculateTextElementDimensions(
+              textEl,
+              resolvedText,
+              undefined,
+              evaluateTextElementRuns(textEl, { record: activeRecord, datasets, variables: currentTemplate.variables }),
+            );
             textEl.width = dims.width;
             textEl.height = dims.height;
             textEl.autoSize = true;
+            textEl.sizingMode = 'auto-width';
           }
         }
 
         return merged;
       });
-      updateElements(nextElements);
+      if (skipHistory) {
+        updateTemplate({ elements: nextElements });
+      } else {
+        updateElements(nextElements);
+      }
     },
-    [currentTemplate.elements, currentTemplate.variables, currentTemplate.databaseConnection, currentTemplate.sampleRecords, datasets, viewport.previewRecordIndex, updateElements]
+    [currentTemplate.elements, currentTemplate.variables, currentTemplate.databaseConnection, currentTemplate.sampleRecords, datasets, viewport.previewRecordIndex, updateElements, updateTemplate]
   );
 
   // Reorder Elements (Z-Index)
@@ -966,9 +1135,9 @@ export default function App() {
   // Undo / Redo
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
-      isUndoRedoAction.current = true;
       const targetIndex = historyIndex - 1;
       const targetState = history[targetIndex];
+      historyIndexRef.current = targetIndex;
       setHistoryIndex(targetIndex);
       updateTemplate({ elements: JSON.parse(JSON.stringify(targetState)) });
     }
@@ -976,9 +1145,9 @@ export default function App() {
 
   const handleRedo = useCallback(() => {
     if (historyIndex < history.length - 1) {
-      isUndoRedoAction.current = true;
       const targetIndex = historyIndex + 1;
       const targetState = history[targetIndex];
+      historyIndexRef.current = targetIndex;
       setHistoryIndex(targetIndex);
       updateTemplate({ elements: JSON.parse(JSON.stringify(targetState)) });
     }
@@ -990,88 +1159,180 @@ export default function App() {
   };
 
   const handleInsertTextType = (textType: TextObjectType = 'single-line') => {
+    // Unified default visual appearance for EVERY text object type.
+    // Only functional behavior (multiline / wrap / sizing / markup) changes per type.
+    const DEFAULT_TEXT = 'Sample Text';
     let name = 'Single Line Text';
-    let text = 'Sample Text';
-    let fontSize = 10;
-    let fontWeight: 'normal' | 'bold' | '600' | '700' | '800' = 'bold';
+    let text = DEFAULT_TEXT;
+    const fontSize = 10;
+    const fontWeight: 'normal' | 'bold' | '600' | '700' | '800' = 'normal';
     let multiline = false;
     let wrap = false;
+    let sizingMode: TextSizingMode = 'auto-width';
+    let autoSize = true;
+    let autoHeight = false;
+    let elW = 26;
+    let elH = 6;
+    let arcConfig: ArcConfig | undefined;
+    const fontFamily = 'Arial';
 
-    if (textType === 'multi-line') {
+    if (textType === 'single-line') {
+      name = 'Single Line Text';
+      text = DEFAULT_TEXT;
+      multiline = false;
+      wrap = false;
+      sizingMode = 'auto-width';
+      autoSize = true;
+      const dims = measureTextObject({
+        text,
+        fontFamily,
+        fontSize,
+        fontWeight,
+        fontStyle: 'normal',
+        letterSpacing: 0,
+        lineHeight: 1.2,
+        textType: 'single-line',
+        textFormatType: 'single-line',
+        multiline: false,
+        wrap: false,
+        ignoreMinSize: true,
+      });
+      elW = Number(dims.width.toFixed(1));
+      elH = Number(dims.height.toFixed(1));
+    } else if (textType === 'multi-line') {
       name = 'Multi-line Text';
-      text = 'Enterprise Logistics Label\nDirect Thermal Stock\nHandling: DRY & COOL';
-      fontSize = 9;
-      fontWeight = 'normal';
-      multiline = true;
-    } else if (textType === 'paragraph') {
-      name = 'Paragraph Text';
-      text = 'This is a multi-line paragraph block that reflows and wraps dynamically based on width.';
-      fontSize = 9;
-      fontWeight = 'normal';
+      text = DEFAULT_TEXT;
       multiline = true;
       wrap = true;
+      sizingMode = 'fixed-width';
+      autoSize = false;
+      autoHeight = true;
+      const defaultLayoutW = 60;
+      const dims = measureTextObject({
+        text,
+        fontFamily,
+        fontSize,
+        fontWeight,
+        fontStyle: 'normal',
+        letterSpacing: 0,
+        lineHeight: 1.2,
+        textType: 'multi-line',
+        textFormatType: 'paragraph',
+        multiline: true,
+        wrap: true,
+        containerWidthMm: defaultLayoutW,
+      });
+      elW = defaultLayoutW;
+      elH = dims.height;
+    } else if (textType === 'paragraph') {
+      name = 'Paragraph Text';
+      text = DEFAULT_TEXT;
+      multiline = true;
+      wrap = true;
+      sizingMode = 'fixed-width';
+      autoSize = false;
+      autoHeight = true;
+      const defaultLayoutW = 55;
+      const dims = measureTextObject({
+        text,
+        fontFamily,
+        fontSize,
+        fontWeight,
+        fontStyle: 'normal',
+        letterSpacing: 0,
+        lineHeight: 1.2,
+        textType: 'paragraph',
+        textFormatType: 'paragraph',
+        multiline: true,
+        wrap: true,
+        containerWidthMm: defaultLayoutW,
+      });
+      elW = defaultLayoutW;
+      elH = dims.height;
     } else if (textType === 'word-processor') {
       name = 'Word Processor Document';
-      text = '<b>Product:</b> High Grade Polymer<br/><i>Rating:</i> Heat Resistant Class 2<br/><u>Standard:</u> ISO 9001:2015 Compliant';
-      fontSize = 9;
+      text = DEFAULT_TEXT;
       multiline = true;
+      wrap = true;
+      sizingMode = 'fixed-width';
+      autoSize = false;
+      elW = 65;
+      elH = 20;
     } else if (textType === 'arc') {
       name = 'Arc Text Box';
-      text = '• CAUTION • HIGH VOLTAGE • DANGER •';
-      fontSize = 9;
+      text = DEFAULT_TEXT;
+      sizingMode = 'scale-text';
+      autoSize = false;
+      elW = 50;
+      elH = 20 + 2 * fontSize * (25.4 / 72);
+      arcConfig = {
+        radius: 20,
+        startAngle: 180,
+        sweepAngle: 180,
+        direction: 'clockwise',
+        insidePath: false,
+        characterSpacing: 1,
+      };
     } else if (textType === 'symbol-font') {
       name = 'Symbol Font Characters';
-      text = '⚠ ⚡ ♻ ♺ 📦 ☂ ❄ ✂ ✈ ⛟ ☢ ☣ ⏻ ⚙ ✦ ★ ✔ ✖';
-      fontSize = 13;
-      fontWeight = 'normal';
+      text = DEFAULT_TEXT;
+      const dims = measureTextObject({
+        text,
+        fontFamily,
+        fontSize,
+        fontWeight,
+        multiline: false,
+        wrap: false,
+      });
+      elW = Number(dims.width.toFixed(1));
+      elH = Number(dims.height.toFixed(1));
     } else if (textType === 'rtf') {
       name = 'RTF Markup Container';
-      text = '{\\rtf1\\ansi\\b LOT-BATCH:\\b0 99402-A\\par\\i INSPECTED & CERTIFIED\\i0}';
-      fontSize = 9;
+      text = DEFAULT_TEXT;
       multiline = true;
+      wrap = true;
+      sizingMode = 'fixed-width';
+      autoSize = false;
+      elW = 60;
+      elH = 18;
     } else if (textType === 'html') {
       name = 'HTML Markup Container';
-      text = '<div style="background:#fef2f2;border:1px solid #dc2626;padding:3px"><b style="color:#b91c1c">DANGER:</b> Flammable Liquid<br/><span style="color:#475569;font-size:9px">UN 1993 Class 3 Packaging</span></div>';
-      fontSize = 8.5;
+      text = DEFAULT_TEXT;
       multiline = true;
+      wrap = true;
+      sizingMode = 'fixed-width';
+      autoSize = false;
+      elW = 65;
+      elH = 22;
     } else if (textType === 'xaml') {
       name = 'XAML Markup Container';
-      text = '<TextBlock FontSize="12" FontFamily="Segoe UI"><Run Text="LOT: "/><Run Text="98402-A" Foreground="#dc2626" FontWeight="Bold"/><Run Text=" (PASS)" Foreground="#16a34a"/></TextBlock>';
-      fontSize = 9;
+      text = DEFAULT_TEXT;
       multiline = true;
+      wrap = true;
+      sizingMode = 'fixed-width';
+      autoSize = false;
+      elW = 60;
+      elH = 18;
     }
 
-    const fontFamily = textType === 'symbol-font' ? 'Arial, sans-serif' : 'Arial';
-    const measuredDims = measureTextObject({
-      text,
-      fontFamily,
-      fontSize,
-      fontWeight,
-      fontStyle: 'normal',
-      letterSpacing: 0,
-      lineHeight: 1.2,
-      textType,
-      textFormatType: textType === 'paragraph' ? 'paragraph' : 'single-line',
-      multiline,
-      wrap,
-      containerWidthMm: textType === 'paragraph' ? 45 : undefined,
-    });
-
-    const elW = measuredDims.width;
-    const elH = measuredDims.height;
     const labelW = currentTemplate.dimensions?.width || 100;
     const labelH = currentTemplate.dimensions?.height || 60;
     const stagger = (currentTemplate.elements.length % 6) * 4;
     const spawnX = Math.min(Math.max(4, 10 + stagger), Math.max(4, labelW - elW - 4));
     const spawnY = Math.min(Math.max(4, 8 + stagger), Math.max(4, labelH - elH - 4));
 
+    const isMultiLineObj = textType === 'multi-line' || textType === 'paragraph' || multiline;
+
     const newEl: LabelElement = {
       id: `el-text-${Date.now()}`,
       name: `${name} ${currentTemplate.elements.length + 1}`,
       type: 'text',
       textType,
-      textFormatType: textType === 'paragraph' ? 'paragraph' : 'single-line',
+      textFormatType: textType === 'arc' ? 'arc' : isMultiLineObj ? 'paragraph' : 'single-line',
+      sizingMode,
+      overflow: 'hidden',
       text,
+      ...(arcConfig ? { arcConfig } : {}),
       fontFamily,
       fontSize,
       fontWeight,
@@ -1085,19 +1346,9 @@ export default function App() {
       multiline,
       wordWrap: wrap,
       wrap,
-      autoSize: true,
+      autoSize,
+      autoHeight,
       autoFit: false,
-      autoSizeConfig: {
-        enabled: true,
-        minFontSize: 6,
-        maxFontSize: 720,
-        minWidthScale: 50,
-        maxWidthScale: 200,
-        objectWidth: elW,
-        objectHeight: elH,
-        horizontalAlignment: 'left',
-        verticalAlignment: 'top',
-      },
       x: spawnX,
       y: spawnY,
       width: elW,
@@ -1115,18 +1366,30 @@ export default function App() {
   };
 
   const handleInsertBarcode = (symbology: BarcodeSymbology = 'code128') => {
+    const metadata = getSymbologyMetadata(symbology);
     const labelW = currentTemplate.dimensions?.width || 100;
     const labelH = currentTemplate.dimensions?.height || 60;
-    const elW = Math.min(55, Math.max(25, labelW - 10));
+    const elW = Math.min(metadata.is2D ? 25 : 55, Math.max(25, labelW - 10));
     const elH = Math.min(22, Math.max(12, labelH - 10));
     const stagger = (currentTemplate.elements.length % 6) * 4;
     const spawnX = Math.min(Math.max(4, 8 + stagger), Math.max(4, labelW - elW - 4));
     const spawnY = Math.min(Math.max(4, 12 + stagger), Math.max(4, labelH - elH - 4));
 
-    const initialVal = symbology === 'ean13' ? '4006381333931' : '10850006531238';
+    const initialVal = metadata.defaultSample;
+    const initBarH = metadata.is2D ? elW : 16;
+    const initialLayout = calculateBarcodeLayout({
+      type: 'barcode',
+      symbology,
+      value: initialVal,
+      includeText: true,
+      barHeight: initBarH,
+      humanReadableFontSize: 10,
+      fontSize: 10,
+    } as any);
+
     const newEl: LabelElement = {
       id: `el-bar-${Date.now()}`,
-      name: `1D Barcode (${symbology.toUpperCase()})`,
+      name: `${metadata.is2D ? '2D' : '1D'} Barcode (${symbology.toUpperCase()})`,
       type: 'barcode',
       symbology,
       value: initialVal,
@@ -1144,7 +1407,18 @@ export default function App() {
       includeText: true,
       textPosition: 'below',
       barWidth: 1.5,
-      barHeight: 16,
+      barHeight: initBarH,
+      symbol: {
+        barHeight: initBarH,
+        moduleWidth: 1.5,
+      },
+      humanReadable: {
+        enabled: true,
+        fontSize: 10,
+        fontFamily: 'Arial',
+      },
+      humanReadableFontSize: 10,
+      fontSize: 10,
       quietZone: true,
       foregroundColor: '#000000',
       backgroundColor: '#ffffff',
@@ -1152,7 +1426,7 @@ export default function App() {
       x: spawnX,
       y: spawnY,
       width: elW,
-      height: elH,
+      height: initialLayout.totalHeightMm,
       rotation: 0,
       opacity: 1,
       locked: false,
@@ -1888,30 +2162,44 @@ export default function App() {
   };
 
   const handleExportJSON = async () => {
-    if (activeDocumentInstanceId) {
-      await handleSaveDocumentAs(activeDocumentInstanceId);
+    const activeDocument = openDocuments.find(doc => doc.instanceId === activeDocumentInstanceId);
+    if (!activeDocument) return;
+    try {
+      const exportDocument = { ...activeDocument, template: currentTemplate };
+      const payload = serializePortableBarcodeFlowDocument(exportDocument);
+      const selected = await promptNativeSaveAsDialog(`${currentTemplate.name.replace(/\.(bfl|json|btw)$/i, '')}.portable.bfl`);
+      if (selected.canceled) return;
+      const result = await saveDocumentToDisk(selected.filePath, exportDocument, currentUser.name, selected.fileHandle, { portable: true });
+      if (!result.success) throw new Error(result.error || 'Portable template export failed.');
+      showToast(`Portable editable template exported. ${payload.dependencies?.warnings.join(' ') || ''}`, 'info');
+    } catch (error: any) {
+      showToast(`Portable export failed: ${error.message}`, 'error');
     }
   };
 
+  const fitToWindowRef = useRef<(() => void) | null>(null);
+  const exitFitModeRef = useRef<(() => void) | null>(null);
+  const zoomRectPreviousToolRef = useRef<typeof activeTool>('select');
+  const registerFitToWindow = useCallback((fit: (() => void) | null) => {
+    fitToWindowRef.current = fit;
+  }, []);
+  const registerExitFitMode = useCallback((exitFit: (() => void) | null) => {
+    exitFitModeRef.current = exitFit;
+  }, []);
   const handleZoomFit = useCallback(() => {
-    const baseScale = 3.7795;
-    const availW = Math.max(200, window.innerWidth - (showLeftDock ? 280 : 0) - (showRightDock ? 300 : 0) - 100);
-    const availH = Math.max(200, window.innerHeight - 200);
-    const baseW = currentTemplate.dimensions.width * baseScale;
-    const baseH = currentTemplate.dimensions.height * baseScale;
-    const zoomW = availW / baseW;
-    const zoomH = availH / baseH;
-    const targetZoom = Math.max(0.3, Math.min(2.5, Number(Math.min(zoomW, zoomH).toFixed(2))));
-    const targetPanX = Math.max(20, Math.round((availW - baseW * targetZoom) / 2));
-    const targetPanY = Math.max(20, Math.round((availH - baseH * targetZoom) / 2));
-
-    setViewport((prev) => ({
-      ...prev,
-      zoom: targetZoom,
-      panX: targetPanX,
-      panY: targetPanY,
-    }));
-  }, [currentTemplate.dimensions.width, currentTemplate.dimensions.height, showLeftDock, showRightDock]);
+    fitToWindowRef.current?.();
+  }, []);
+  const handleManualViewportChange = useCallback(() => {
+    exitFitModeRef.current?.();
+  }, []);
+  const handleActivateZoomRectangle = useCallback(() => {
+    if (activeTool !== 'zoom-rect') zoomRectPreviousToolRef.current = activeTool;
+    handleManualViewportChange();
+    setActiveTool('zoom-rect');
+  }, [activeTool, handleManualViewportChange]);
+  const handleExitZoomRectangle = useCallback(() => {
+    setActiveTool(zoomRectPreviousToolRef.current === 'zoom-rect' ? 'select' : zoomRectPreviousToolRef.current);
+  }, []);
 
   const handleImportJSON = async () => {
     await handleOpenDocumentFile();
@@ -2091,6 +2379,13 @@ export default function App() {
       const idx = openDocuments.findIndex((d) => d.instanceId === instanceId);
       if (idx === -1) return;
 
+      const closingDoc = openDocuments[idx];
+      if (closingDoc?.template) {
+        documentEventDispatcher.dispatch('OnClose', closingDoc.template, {
+          documentName: closingDoc.name,
+        });
+      }
+
       const remaining = openDocuments.filter((d) => d.instanceId !== instanceId);
 
       if (remaining.length === 0) {
@@ -2152,7 +2447,7 @@ export default function App() {
       const doc = openDocuments.find((d) => d.instanceId === instanceId);
       if (!doc) return;
 
-      if (doc.isDirty) {
+      if (hasUnsavedDocumentChanges(doc)) {
         setUnsavedDocModal({
           isOpen: true,
           instanceId,
@@ -2169,7 +2464,7 @@ export default function App() {
   const handleSaveDocumentAs = useCallback(
     async (instanceId: string, customName?: string, description?: string) => {
       const orig = openDocuments.find((d) => d.instanceId === instanceId) || activeDocument;
-      if (!orig) return;
+      if (!orig) return false;
 
       const origTpl = orig.template || currentTemplate;
       const defaultFileName = customName || orig.name || origTpl.name || 'ProductLabel';
@@ -2177,7 +2472,7 @@ export default function App() {
       try {
         const dialogRes = await promptNativeSaveAsDialog(defaultFileName);
         if (!dialogRes || dialogRes.canceled) {
-          return; // User cancelled dialog
+          return false;
         }
 
         const targetFilePath = dialogRes.filePath || `${defaultFileName}.bfl`;
@@ -2210,8 +2505,25 @@ export default function App() {
         const saveRes = await saveDocumentToDisk(targetFilePath, targetDoc, currentUser.name, dialogRes.fileHandle);
         if (!saveRes.success) {
           showToast(`Save As failed: ${saveRes.error}`, 'error');
-          return;
+          return false;
         }
+
+        setCurrentTemplateId(updatedTemplate.id);
+        setOpenDocuments((prev) =>
+          prev.map((doc) => {
+            if (doc.instanceId !== orig.instanceId) return doc;
+            const unchanged = doc.template === origTpl;
+            return {
+              ...doc,
+              name: cleanName,
+              filePath: targetFilePath,
+              documentId: updatedTemplate.id,
+              template: unchanged ? updatedTemplate : { ...updatedTemplate, ...doc.template, id: updatedTemplate.id, name: cleanName },
+              isDirty: !unchanged,
+              isNew: false,
+            };
+          })
+        );
 
         // Local cache & API backup
         try {
@@ -2225,25 +2537,6 @@ export default function App() {
           const exists = prev.some((t) => t.id === updatedTemplate.id);
           return exists ? prev.map((t) => (t.id === updatedTemplate.id ? updatedTemplate : t)) : [updatedTemplate, ...prev];
         });
-        setCurrentTemplateId(updatedTemplate.id);
-
-        // Update active tab to point to the saved file
-        setOpenDocuments((prev) =>
-          prev.map((d) =>
-            d.instanceId === orig.instanceId
-              ? {
-                  ...d,
-                  name: cleanName,
-                  filePath: targetFilePath,
-                  documentId: updatedTemplate.id,
-                  template: updatedTemplate,
-                  isDirty: false,
-                  isNew: false,
-                }
-              : d
-          )
-        );
-
         // Update Recent Documents list
         const updatedRecent = addRecentDocument(targetFilePath, targetFileName);
         setRecentDocuments(updatedRecent);
@@ -2251,9 +2544,16 @@ export default function App() {
         setIsSaveAsModalOpen(false);
         showToast(`Saved: ${targetFileName}`, 'success');
         logAction('CREATE_TEMPLATE', `Saved document as "${targetFileName}" to ${targetFilePath}`);
+
+        // Document Lifecycle Event: OnSave
+        documentEventDispatcher.dispatch('OnSave', updatedTemplate, {
+          filePath: targetFilePath,
+        });
+        return true;
       } catch (err: any) {
         console.error('Save As error:', err);
         showToast(`Save As failed: ${err?.message || 'File system error'}`, 'error');
+        return false;
       }
     },
     [openDocuments, activeDocument, currentTemplate, currentUser.name]
@@ -2262,20 +2562,19 @@ export default function App() {
   const handleSaveDocument = useCallback(
     async (instanceId: string) => {
       const doc = openDocuments.find((d) => d.instanceId === instanceId);
-      if (!doc) return;
+      if (!doc) return false;
 
       if (doc.type === 'form') {
         setOpenDocuments((prev) =>
-          prev.map((d) => (d.instanceId === instanceId ? { ...d, isDirty: false } : d))
+          prev.map((d) => (d.instanceId === instanceId ? { ...d, isDirty: false, isNew: false } : d))
         );
         showToast(`Form "${doc.name}" saved!`, 'success');
-        return;
+        return true;
       }
 
       // If document has no file path, first-time save MUST open native Save As dialog
       if (!doc.filePath) {
-        await handleSaveDocumentAs(instanceId);
-        return;
+        return handleSaveDocumentAs(instanceId);
       }
 
       const tpl = doc.template || currentTemplate;
@@ -2298,8 +2597,16 @@ export default function App() {
         const saveRes = await saveDocumentToDisk(doc.filePath, targetDoc);
         if (!saveRes.success) {
           showToast(`Save failed: ${saveRes.error}. Changes retained in memory.`, 'error');
-          return;
+          return false;
         }
+
+        setOpenDocuments((prev) =>
+          prev.map((currentDoc) =>
+            currentDoc.instanceId === instanceId && currentDoc.template === tpl
+              ? { ...currentDoc, isDirty: false, isNew: false, template: savedTemplate, documentId: savedTemplate.id, name: savedTemplate.name }
+              : currentDoc
+          )
+        );
 
         try {
           await apiService.templates.save(savedTemplate);
@@ -2307,15 +2614,6 @@ export default function App() {
           const updatedCache = [savedTemplate, ...cached.filter((c: any) => c.id !== savedTemplate.id)];
           localStorage.setItem('barcodeflow_templates_cache', JSON.stringify(updatedCache.slice(0, 50)));
         } catch { }
-
-        // Reset dirty state ONLY after successful disk write
-        setOpenDocuments((prev) =>
-          prev.map((d) =>
-            d.instanceId === instanceId
-              ? { ...d, isDirty: false, isNew: false, template: savedTemplate, documentId: savedTemplate.id, name: savedTemplate.name }
-              : d
-          )
-        );
 
         setTemplates((prev) => {
           const exists = prev.some((t) => t.id === savedTemplate.id);
@@ -2330,9 +2628,16 @@ export default function App() {
 
         showToast(`Saved: ${saveRes.fileName || doc.name}`, 'success');
         logAction('EDIT_TEMPLATE', `Saved document "${doc.name}" to ${doc.filePath}`);
+
+        // Document Lifecycle Event: OnSave
+        documentEventDispatcher.dispatch('OnSave', savedTemplate, {
+          filePath: doc.filePath,
+        });
+        return true;
       } catch (err: any) {
         console.error('Failed to save document:', err);
         showToast(`Save failed: ${err?.message || 'File system error'}. Changes retained in memory.`, 'error');
+        return false;
       }
     },
     [openDocuments, currentTemplate, currentUser.name, handleSaveDocumentAs]
@@ -2347,7 +2652,7 @@ export default function App() {
   const handleSaveAllDocuments = useCallback(async () => {
     if (!openDocuments || openDocuments.length === 0) {
       showToast('No open documents to save.', 'info');
-      return;
+      return true;
     }
 
     const successfulInstanceIds: string[] = [];
@@ -2355,13 +2660,17 @@ export default function App() {
     let savedCount = 0;
 
     for (const doc of openDocuments) {
+      if (!hasUnsavedDocumentChanges(doc)) continue;
       if (doc.type === 'template') {
         if (!doc.filePath) {
           // Unsaved new document -> prompt native Windows Save As dialog to choose location on PC
           try {
-            await handleSaveDocumentAs(doc.instanceId);
-            successfulInstanceIds.push(doc.instanceId);
-            savedCount++;
+            if (await handleSaveDocumentAs(doc.instanceId)) {
+              successfulInstanceIds.push(doc.instanceId);
+              savedCount++;
+            } else {
+              failedNames.push(doc.name);
+            }
           } catch (err) {
             console.error(`Save As failed for document "${doc.name}":`, err);
             failedNames.push(doc.name);
@@ -2410,180 +2719,105 @@ export default function App() {
     setRecentDocuments(getRecentDocuments());
 
     if (failedNames.length === 0) {
+      await (window as any).electronAPI?.clearRecoverySnapshot?.();
       showToast(`Successfully saved all ${savedCount} document(s) to local PC!`, 'success');
       logAction('SYSTEM_CONFIG', `Saved all ${savedCount} open documents to local PC`);
     } else {
       showToast(`Saved ${savedCount} document(s). Failed: ${failedNames.join(', ')}`, 'error');
     }
+    return failedNames.length === 0;
   }, [openDocuments, currentTemplate, currentUser.name, handleSaveDocumentAs]);
 
-  const handleOpenDocumentFile = useCallback(async () => {
-    try {
-      const openRes = await promptNativeOpenDialog();
-      if (!openRes || openRes.canceled || !openRes.filePath) {
-        return; // User cancelled
+  /**
+   * Single authoritative document loader for:
+   * - Open Existing Document
+   * - Open Recent Document
+   * - Command-line / Startup file path opening
+   */
+  const openDocument = useCallback(
+    async (
+      filePathOrFile: string | { filePath: string; fileName?: string; content?: any },
+      options?: {
+        forceReload?: boolean;
+        onStateUpdate?: (st: DocumentImportState) => void;
+        onStatsUpdate?: (stats: any) => void;
       }
-
-      const filePath = openRes.filePath;
-      const normalizedPath = filePath.toLowerCase().replace(/\\/g, '/');
-
-      // Check if file is already open in one of the active tabs
-      const existingDoc = openDocuments.find(
-        (d) => d.filePath && d.filePath.toLowerCase().replace(/\\/g, '/') === normalizedPath
-      );
-
-      if (existingDoc) {
-        setActiveDocumentInstanceId(existingDoc.instanceId);
-        if (existingDoc.documentId) setCurrentTemplateId(existingDoc.documentId);
-        showToast(`Activated already open document: ${existingDoc.name}`, 'info');
-        return;
-      }
-
-      let fileContent = openRes.content;
-      if (!fileContent) {
-        // Read file from disk via Electron
-        const readRes = await readDocumentFromDisk(filePath);
-        if (!readRes.success || (!readRes.content && !readRes.data)) {
-          showToast(`Failed to open document: ${readRes.error || 'File read error'}`, 'error');
-          return;
-        }
-        fileContent = readRes.content || readRes.data;
-      }
-
-      // Deserialize .bfl, .btw, or JSON into BarcodeFlow document
-      const docFile = deserializeBarcodeFlowDocument(
-        fileContent,
-        filePath.split(/[\\/]/).pop() || 'Opened Document',
-        filePath
-      );
-      const loadedTemplate = docFile.template || INITIAL_TEMPLATES[0];
-
-      // Reconnect and refresh live Excel data source if configured
-      if (loadedTemplate.databaseConnection?.filePath && (loadedTemplate.databaseConnection.type === 'excel' || (loadedTemplate.databaseConnection as any).type === 'ms_excel')) {
-        try {
-          const rawSheet = (loadedTemplate.databaseConnection.sheetName || '').replace(/^'|'\$$|\$$/g, '');
-          const liveRes = await excelDataSourceProvider.getPreview(
-            {
-              filePath: loadedTemplate.databaseConnection.filePath,
-              sheetName: rawSheet,
-              headerRow: loadedTemplate.databaseConnection.headerRow || 1,
-              hasHeaders: true,
-              pageSize: 100000,
-            },
-            rawSheet
-          );
-          if (liveRes && liveRes.rows && liveRes.rows.length > 0) {
-            const detectedFields = liveRes.fields?.map((f) => f.name) || Object.keys(liveRes.rows[0]);
-            loadedTemplate.databaseConnection = {
-              ...loadedTemplate.databaseConnection,
-              records: liveRes.rows,
-              columns: liveRes.fields?.map((f) => ({ name: f.name, dataType: f.dataType as any })) || detectedFields.map((f) => ({ name: f, dataType: 'text' })),
-              fields: detectedFields,
-              status: 'CONNECTED',
-            };
-            loadedTemplate.sampleRecords = liveRes.rows;
-            if (window.barcodeFlow?.dataSources?.excel?.watch) {
-              await window.barcodeFlow.dataSources.excel.watch({
-                filePath: loadedTemplate.databaseConnection.filePath,
-                connectionId: loadedTemplate.databaseConnection.id || loadedTemplate.id,
-              });
-            }
-          } else {
-            loadedTemplate.databaseConnection.status = 'FILE_MISSING';
-          }
-        } catch {
-          loadedTemplate.databaseConnection.status = 'FILE_MISSING';
-        }
-      }
-
-      const newDoc: OpenDocument = {
-        instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        documentId: loadedTemplate.id,
-        type: 'template',
-        filePath: filePath,
-        name: docFile.name || loadedTemplate.name || 'ProductLabel',
-        isDirty: false,
-        isNew: false,
-        template: loadedTemplate,
-        selectedElementIds: [],
-        history: { entries: [loadedTemplate.elements || []], index: 0 },
-        viewState: { zoom: 1.25, panX: 40, panY: 40 },
-        dataState: {
-          currentRecordIndex: 0,
-          selectedRecordIndices: [],
-        },
-      };
-
-      setTemplates((prev) => {
-        const exists = prev.some((t) => t.id === loadedTemplate.id);
-        return exists ? prev.map((t) => (t.id === loadedTemplate.id ? loadedTemplate : t)) : [loadedTemplate, ...prev];
-      });
-
-      setOpenDocuments((prev) => [...prev, newDoc]);
-      setActiveDocumentInstanceId(newDoc.instanceId);
-      setCurrentTemplateId(loadedTemplate.id);
-      setSelectedElementIds([]);
-      setHistory([loadedTemplate.elements || []]);
-      setHistoryIndex(0);
-      setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
-
-      // Add to Recent Documents list
-      const updatedRecent = addRecentDocument(filePath, docFile.name || loadedTemplate.name);
-      setRecentDocuments(updatedRecent);
-
-      showToast(`Opened: ${docFile.name || loadedTemplate.name}`, 'success');
-      logAction('CREATE_TEMPLATE', `Opened document from disk: ${filePath}`);
-    } catch (err: any) {
-      console.error('Open document error:', err);
-      showToast(`Failed to open document: ${err?.message || 'File read error'}`, 'error');
-    }
-  }, [openDocuments]);
-
-  const handleOpenRecentDocument = useCallback(
-    async (filePath: string) => {
+    ) => {
       try {
-        const fileCheck = await checkFileExistsOnDisk(filePath);
-        if (!fileCheck) {
-          showToast(`File not found: ${filePath}. Removed from Recent list.`, 'error');
-          const updated = removeRecentDocument(filePath);
-          setRecentDocuments(updated);
-          return;
-        }
+        const rawPath = typeof filePathOrFile === 'string' ? filePathOrFile : filePathOrFile.filePath;
+        const normalizedPath = normalizeWindowsPath(rawPath);
 
-        const normalizedPath = filePath.toLowerCase().replace(/\\/g, '/');
+        // Check if file is already open in one of the active tabs
         const existingDoc = openDocuments.find(
-          (d) => d.filePath && d.filePath.toLowerCase().replace(/\\/g, '/') === normalizedPath
+          (d) => d.filePath && areWindowsPathsEqual(d.filePath, normalizedPath)
         );
 
-        if (existingDoc) {
+        if (existingDoc && !options?.forceReload) {
           setActiveDocumentInstanceId(existingDoc.instanceId);
           if (existingDoc.documentId) setCurrentTemplateId(existingDoc.documentId);
-          showToast(`Activated open document: ${existingDoc.name}`, 'info');
-          return;
+          showToast(`Activated already open document: ${existingDoc.name}`, 'info');
+          const updatedRecent = addRecentDocument(normalizedPath, existingDoc.name);
+          setRecentDocuments(updatedRecent);
+          options?.onStateUpdate?.('IDLE');
+          return { success: true, doc: existingDoc };
         }
 
-        const readRes = await readDocumentFromDisk(filePath);
-        if (!readRes.success || (!readRes.content && !readRes.data)) {
-          showToast(`Failed to open recent document: ${readRes.error || 'File read error'}`, 'error');
-          return;
+        let fileContent = typeof filePathOrFile === 'object' ? filePathOrFile.content : undefined;
+        if (!fileContent) {
+          options?.onStateUpdate?.('READING_FILE');
+          // Verify existence on disk only if we must read from disk
+          const fileCheck = await checkFileExistsOnDisk(normalizedPath);
+          if (!fileCheck) {
+            showToast(`The document could not be found: ${normalizedPath}`, 'error');
+            options?.onStateUpdate?.('ERROR');
+            setImportErrorMessage(`The document could not be found: ${normalizedPath}`);
+            return { success: false, missing: true, error: 'File not found on disk' };
+          }
+
+          const readRes = await readDocumentFromDisk(normalizedPath, phase => {
+            setImportFileName(normalizedPath.split(/[\\/]/).pop() || 'BarTender Document');
+            setImportState(phase);
+            options?.onStateUpdate?.(phase);
+          });
+          if (readRes.canceled) {
+            setImportState('IDLE');
+            options?.onStateUpdate?.('IDLE');
+            return { success: false, canceled: true };
+          }
+          if (!readRes.success || (!readRes.content && !readRes.data)) {
+            showToast(`Failed to open document: ${readRes.error || 'File read error'}`, 'error');
+            options?.onStateUpdate?.('ERROR');
+            setImportErrorMessage(readRes.error || 'File read error from disk');
+            return { success: false, error: readRes.error || 'File read error' };
+          }
+          fileContent = readRes.content || readRes.data;
         }
 
-        const docFile = deserializeBarcodeFlowDocument(
-          readRes.content || readRes.data,
-          filePath.split(/[\\/]/).pop() || 'Recent Document',
-          filePath
-        );
+        options?.onStateUpdate?.('DETECTING_FORMAT');
+        const fallbackName = normalizedPath.split('\\').pop() || 'Opened Document';
+
+        options?.onStateUpdate?.('PARSING');
+        const docFile = deserializeBarcodeFlowDocument(fileContent, fallbackName, normalizedPath);
+
+        options?.onStateUpdate?.('CONVERTING');
         const loadedTemplate = docFile.template || INITIAL_TEMPLATES[0];
+        if (docFile.imported) loadedTemplate.id = `${loadedTemplate.id}-draft-${crypto.randomUUID()}`;
 
         // Reconnect and refresh live Excel data source if configured
-        if (loadedTemplate.databaseConnection?.filePath && (loadedTemplate.databaseConnection.type === 'excel' || (loadedTemplate.databaseConnection as any).type === 'ms_excel')) {
+        const databaseConnection = loadedTemplate.databaseConnection;
+        const excelFilePath = databaseConnection?.filePath;
+        if (
+          databaseConnection &&
+          excelFilePath &&
+          (databaseConnection.type === 'excel' || (databaseConnection as any).type === 'ms_excel')
+        ) {
           try {
-            const rawSheet = (loadedTemplate.databaseConnection.sheetName || '').replace(/^'|'\$$|\$$/g, '');
+            const rawSheet = (databaseConnection.sheetName || '').replace(/^'|'\$$|\$$/g, '');
             const liveRes = await excelDataSourceProvider.getPreview(
               {
-                filePath: loadedTemplate.databaseConnection.filePath,
+                filePath: excelFilePath,
                 sheetName: rawSheet,
-                headerRow: loadedTemplate.databaseConnection.headerRow || 1,
+                headerRow: databaseConnection.headerRow || 1,
                 hasHeaders: true,
                 pageSize: 100000,
               },
@@ -2592,36 +2826,41 @@ export default function App() {
             if (liveRes && liveRes.rows && liveRes.rows.length > 0) {
               const detectedFields = liveRes.fields?.map((f) => f.name) || Object.keys(liveRes.rows[0]);
               loadedTemplate.databaseConnection = {
-                ...loadedTemplate.databaseConnection,
+                ...databaseConnection,
                 records: liveRes.rows,
-                columns: liveRes.fields?.map((f) => ({ name: f.name, dataType: f.dataType as any })) || detectedFields.map((f) => ({ name: f, dataType: 'text' })),
+                columns:
+                  liveRes.fields?.map((f) => ({ name: f.name, dataType: f.dataType as any })) ||
+                  detectedFields.map((f) => ({ name: f, dataType: 'text' })),
                 fields: detectedFields,
                 status: 'CONNECTED',
               };
               loadedTemplate.sampleRecords = liveRes.rows;
               if (window.barcodeFlow?.dataSources?.excel?.watch) {
                 await window.barcodeFlow.dataSources.excel.watch({
-                  filePath: loadedTemplate.databaseConnection.filePath,
-                  connectionId: loadedTemplate.databaseConnection.id || loadedTemplate.id,
+                  filePath: excelFilePath,
+                  connectionId: databaseConnection.id || loadedTemplate.id,
                 });
               }
             } else {
-              loadedTemplate.databaseConnection.status = 'FILE_MISSING';
+              databaseConnection.status = 'FILE_MISSING';
             }
           } catch {
-            loadedTemplate.databaseConnection.status = 'FILE_MISSING';
+            databaseConnection.status = 'FILE_MISSING';
           }
         }
 
+        options?.onStateUpdate?.('LOADING_DOCUMENT');
+        const docTitle = docFile.name || loadedTemplate.name || fallbackName;
         const newDoc: OpenDocument = {
           instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           documentId: loadedTemplate.id,
           type: 'template',
-          filePath: filePath,
-          name: docFile.name || loadedTemplate.name || 'ProductLabel',
-          isDirty: false,
-          isNew: false,
+          filePath: docFile.imported ? undefined : normalizedPath,
+          name: docTitle,
+          isDirty: docFile.imported === true,
+          isNew: docFile.imported === true,
           template: loadedTemplate,
+          dependencies: docFile.dependencies,
           selectedElementIds: [],
           history: { entries: [loadedTemplate.elements || []], index: 0 },
           viewState: { zoom: 1.25, panX: 40, panY: 40 },
@@ -2636,7 +2875,21 @@ export default function App() {
           return exists ? prev.map((t) => (t.id === loadedTemplate.id ? loadedTemplate : t)) : [loadedTemplate, ...prev];
         });
 
-        setOpenDocuments((prev) => [...prev, newDoc]);
+        // Transactional commit: clean initial placeholder Document1 is replaced, otherwise appended
+        setOpenDocuments((prev) => {
+          if (
+            prev.length === 1 &&
+            !hasUnsavedDocumentChanges(prev[0]) &&
+            !prev[0].filePath &&
+            prev[0].name.toLowerCase().includes('document1') &&
+            (prev[0].template?.elements?.length || 0) <= 2
+          ) {
+            return [newDoc];
+          }
+          return [...prev, newDoc];
+        });
+
+        options?.onStateUpdate?.('RENDERING');
         setActiveDocumentInstanceId(newDoc.instanceId);
         setCurrentTemplateId(loadedTemplate.id);
         setSelectedElementIds([]);
@@ -2644,18 +2897,338 @@ export default function App() {
         setHistoryIndex(0);
         setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
 
-        const updatedRecent = addRecentDocument(filePath, docFile.name || loadedTemplate.name);
+        // Update Recent Documents list with canonical entry
+        const updatedRecent = addRecentDocument(normalizedPath, docTitle);
         setRecentDocuments(updatedRecent);
 
-        showToast(`Opened: ${docFile.name || loadedTemplate.name}`, 'success');
-        logAction('CREATE_TEMPLATE', `Opened recent document: ${filePath}`);
+        // Compile and emit stats
+        const bcCount = loadedTemplate.elements.filter((e) => e.type === 'barcode').length;
+        const txtCount = loadedTemplate.elements.filter((e) => e.type === 'text').length;
+        const lineCount = loadedTemplate.elements.filter((e) => e.type === 'shape').length;
+        const totalDiscovered = (loadedTemplate as any).importReport?.totalDiscovered ?? loadedTemplate.elements.length;
+        const fullyEditable = (loadedTemplate as any).importReport?.fullyEditable ?? loadedTemplate.elements.length;
+
+        options?.onStatsUpdate?.({
+          totalDiscovered,
+          fullyEditable,
+          barcodes: bcCount,
+          text: txtCount,
+          lines: lineCount,
+        });
+
+        // If imported from BarTender .btw, show detailed Import Report
+        if ((loadedTemplate as any).importReport) {
+          setBtwImportReport((loadedTemplate as any).importReport);
+          setIsBtwImportReportOpen(true);
+        }
+
+        options?.onStateUpdate?.('SUCCESS');
+        setTimeout(() => {
+          setImportState((curr) => (curr === 'SUCCESS' ? 'IDLE' : curr));
+        }, 1200);
+
+        const dependencyWarnings = docFile.dependencies?.warnings;
+        showToast(`Opened: ${docTitle}${dependencyWarnings?.length ? `. ${dependencyWarnings.join(' ')}` : ''}`, dependencyWarnings?.length ? 'info' : 'success');
+        logAction('CREATE_TEMPLATE', `Opened document: ${normalizedPath}`);
+
+        // Update title bar
+        if (typeof document !== 'undefined') {
+          document.title = `${docTitle} - BarcodeFlow Enterprise`;
+        }
+
+        // Document Lifecycle Event: OnOpen
+        documentEventDispatcher.dispatch('OnOpen', loadedTemplate, {
+          filePath: normalizedPath,
+          databaseRecord: loadedTemplate.sampleRecords?.[0] || {},
+        });
+
+        return { success: true, doc: newDoc };
       } catch (err: any) {
-        console.error('Open recent document error:', err);
-        showToast(`Failed to open recent file: ${err?.message || 'Read error'}`, 'error');
+        console.error('Open document error:', err);
+        options?.onStateUpdate?.('ERROR');
+        setImportErrorMessage(err?.message || 'File read error');
+        showToast(`Failed to open document: ${err?.message || 'File read error'}`, 'error');
+        return { success: false, error: err?.message || 'File read error' };
       }
     },
     [openDocuments]
   );
+
+  useEffect(() => {
+    (window as any).__openDocument = openDocument;
+    (window as any).__importBtwFromUrl = async (url: string, name?: string) => {
+      const resp = await fetch(url);
+      const ab = await resp.arrayBuffer();
+      const content = new Uint8Array(ab);
+      const fileName = name || url.split('/').pop() || 'imported.btw';
+      return await openDocument({
+        filePath: fileName,
+        fileName: fileName,
+        content,
+      });
+    };
+    return () => {
+      delete (window as any).__openDocument;
+      delete (window as any).__importBtwFromUrl;
+    };
+  }, [openDocument]);
+
+  const handleOpenDocumentFile = useCallback(async () => {
+    try {
+      setImportState('SELECTING_FILE');
+      setImportErrorMessage('');
+      setImportStats(undefined);
+
+      const openRes = await promptNativeOpenDialog();
+      if (!openRes || openRes.canceled || !openRes.filePath) {
+        setImportState('IDLE');
+        return; // User cancelled
+      }
+
+      const selectedName = openRes.fileName || openRes.filePath.split(/[\\/]/).pop() || 'BarTender Document.btw';
+      setImportFileName(selectedName);
+
+      if (openRes.file) {
+        console.log(`[OPEN] File selected: ${openRes.file.name}, size: ${openRes.file.size} bytes, type: ${openRes.file.type}`);
+      }
+
+      setImportState('READING_FILE');
+
+      await openDocument(
+        openRes.content
+          ? { filePath: openRes.filePath, fileName: openRes.fileName, content: openRes.content }
+          : openRes.filePath,
+        {
+          onStateUpdate: (st) => setImportState(st),
+          onStatsUpdate: (stats) => setImportStats(stats),
+        }
+      );
+    } catch (err: any) {
+      console.error('Open document dialog error:', err);
+      setImportState('ERROR');
+      setImportErrorMessage(err?.message || 'File system error');
+      showToast(`Open document failed: ${err?.message || 'File system error'}`, 'error');
+    }
+  }, [openDocument]);
+
+  const handleOpenRecentDocument = useCallback(
+    async (filePath: string) => {
+      const res = await openDocument(filePath);
+      if (res && !res.success && res.missing) {
+        const updated = removeRecentDocument(filePath);
+        setRecentDocuments(updated);
+      }
+    },
+    [openDocument]
+  );
+
+  // Unsaved Document Safety wrappers for New, Open, and Open Recent
+  const handleRequestNewDocument = useCallback(() => {
+    if (activeDocument && hasUnsavedDocumentChanges(activeDocument)) {
+      setUnsavedDocModal({
+        isOpen: true,
+        instanceId: activeDocument.instanceId,
+        documentName: activeDocument.name,
+        action: 'new',
+      });
+      return;
+    }
+    setIsNewDocWizardOpen(true);
+  }, [activeDocument]);
+
+  const handleRequestOpenDocumentFile = useCallback(() => {
+    if (activeDocument && hasUnsavedDocumentChanges(activeDocument)) {
+      setUnsavedDocModal({
+        isOpen: true,
+        instanceId: activeDocument.instanceId,
+        documentName: activeDocument.name,
+        action: 'open',
+      });
+      return;
+    }
+    handleOpenDocumentFile();
+  }, [activeDocument, handleOpenDocumentFile]);
+
+  const handleRequestOpenRecentDocument = useCallback(
+    (filePath: string) => {
+      if (activeDocument && hasUnsavedDocumentChanges(activeDocument)) {
+        setUnsavedDocModal({
+          isOpen: true,
+          instanceId: activeDocument.instanceId,
+          documentName: activeDocument.name,
+          action: 'openRecent',
+          targetPath: filePath,
+        });
+        return;
+      }
+      handleOpenRecentDocument(filePath);
+    },
+    [activeDocument, handleOpenRecentDocument]
+  );
+
+  const requestOpenDocumentRef = useRef(handleRequestOpenRecentDocument);
+  requestOpenDocumentRef.current = handleRequestOpenRecentDocument;
+  const continueStartupRef = useRef<() => void>(() => undefined);
+  continueStartupRef.current = () => {
+    const queuedPaths = pendingStartupPathsRef.current.splice(0);
+    if (queuedPaths.length > 0) {
+      startupDocumentRequestedRef.current = true;
+      queuedPaths.forEach((filePath) => requestOpenDocumentRef.current(filePath));
+      return;
+    }
+    if (pendingWelcomeRef.current && !startupDocumentRequestedRef.current) setIsWelcomeOpen(true);
+  };
+
+  useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.rendererReady || !electronAPI?.onOpenDocumentRequest) return;
+
+    let isMounted = true;
+    const openRequestedDocument = (filePath: string) => {
+      startupDocumentRequestedRef.current = true;
+      setIsWelcomeOpen(false);
+      if (!recoveryLoadedRef.current || recoveryActiveRef.current) {
+        if (!pendingStartupPathsRef.current.includes(filePath)) pendingStartupPathsRef.current.push(filePath);
+        return;
+      }
+      requestOpenDocumentRef.current(filePath);
+    };
+    const unsubscribe = electronAPI.onOpenDocumentRequest(openRequestedDocument);
+
+    void electronAPI.rendererReady().then(async (startupPaths: string[]) => {
+      if (!isMounted) return;
+      pendingStartupPathsRef.current.push(...startupPaths.filter((filePath) => !pendingStartupPathsRef.current.includes(filePath)));
+      const settings = await getAppStartupSettings();
+      if (!isMounted) return;
+      setShowWelcomeOnStartup(settings.showWelcomeOnStartup);
+      pendingWelcomeRef.current = settings.showWelcomeOnStartup;
+      const snapshot = await electronAPI.readRecoverySnapshot?.();
+      if (!isMounted) return;
+      recoveryLoadedRef.current = true;
+      if (snapshot?.version === 1 && Array.isArray(snapshot.documents) && snapshot.documents.length > 0) {
+        recoveryActiveRef.current = true;
+        setRecoverySnapshot(snapshot);
+        setIsRecoveryPromptOpen(true);
+        return;
+      }
+      continueStartupRef.current();
+    }).catch((error: unknown) => {
+      console.warn('Desktop startup handshake failed:', error);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const electronAPI = (window as any).electronAPI;
+    if (!electronAPI?.writeRecoverySnapshot || !recoveryLoadedRef.current) return;
+
+    let disposed = false;
+    const writeSnapshot = async () => {
+      if (disposed || recoveryActiveRef.current) return;
+      const dirtyDocuments = openDocumentsRef.current.filter(hasUnsavedDocumentChanges);
+      if (dirtyDocuments.length === 0) {
+        if (!recoverySnapshot) await electronAPI.clearRecoverySnapshot?.();
+        return;
+      }
+      try {
+        const snapshot = {
+          version: 1,
+          savedAt: new Date().toISOString(),
+          documents: dirtyDocuments.map((doc) => ({
+            name: doc.name,
+            document: serializeBarcodeFlowDocument(doc, currentUser.name),
+          })),
+        };
+        const saved = await electronAPI.writeRecoverySnapshot(snapshot);
+        if (!saved) console.warn('Could not save the latest document recovery snapshot.');
+      } catch (error) {
+        console.warn('Could not serialize the latest document recovery snapshot:', error);
+      }
+    };
+
+    const debounce = window.setTimeout(() => void writeSnapshot(), 1500);
+    const interval = window.setInterval(() => void writeSnapshot(), 30000);
+    return () => {
+      disposed = true;
+      window.clearTimeout(debounce);
+      window.clearInterval(interval);
+    };
+  }, [openDocuments, recoverySnapshot, currentUser.name]);
+
+  const continueAfterRecovery = () => {
+    recoveryActiveRef.current = false;
+    setRecoverySnapshot(null);
+    setRecoveryError(undefined);
+    setIsRecoveryPromptOpen(false);
+    continueStartupRef.current();
+  };
+
+  const handleRecoverDocuments = async () => {
+    if (!recoverySnapshot) return;
+    try {
+      const recoveredDocuments: OpenDocument[] = recoverySnapshot.documents.map((entry: any, index: number) => {
+        const parsed = deserializeBarcodeFlowDocument(entry.document, entry.name || 'Recovered Document');
+        const recoveredId = `recovered-${Date.now()}-${index}`;
+        const recoveredName = `${parsed.name || entry.name || 'Recovered Document'} (Recovered)`;
+        const template = parsed.template
+          ? { ...parsed.template, id: recoveredId, name: recoveredName, status: 'draft' as const }
+          : undefined;
+        return {
+          instanceId: `doc-${recoveredId}`,
+          documentId: recoveredId,
+          type: parsed.type,
+          name: recoveredName,
+          isDirty: true,
+          isNew: true,
+          template,
+          form: parsed.form,
+          selectedElementIds: [],
+          history: { entries: [template?.elements || []], index: 0 },
+          viewState: { zoom: 1.25, panX: 40, panY: 40 },
+          dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
+        };
+      });
+      if (recoveredDocuments.length === 0) throw new Error('The recovery snapshot contained no documents.');
+
+      const recoveryApi = (window as any).electronAPI;
+      const refreshedSnapshot = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        documents: recoveredDocuments.map((doc) => ({
+          name: doc.name,
+          document: serializeBarcodeFlowDocument(doc, currentUser.name),
+        })),
+      };
+      if (recoveryApi?.writeRecoverySnapshot && !(await recoveryApi.writeRecoverySnapshot(refreshedSnapshot))) {
+        throw new Error('The recovered copies could not be secured in the recovery folder.');
+      }
+
+      setOpenDocuments(recoveredDocuments);
+      setTemplates((previous) => [...recoveredDocuments.flatMap((doc) => doc.template ? [doc.template] : []), ...previous]);
+      setActiveDocumentInstanceId(recoveredDocuments[0].instanceId);
+      if (recoveredDocuments[0].documentId) setCurrentTemplateId(recoveredDocuments[0].documentId);
+      setSelectedElementIds([]);
+      setHistory([recoveredDocuments[0].template?.elements || []]);
+      setHistoryIndex(0);
+      setActiveView('designer');
+      continueAfterRecovery();
+    } catch (error: any) {
+      setRecoveryError(error?.message || 'The recovery snapshot could not be opened.');
+    }
+  };
+
+  const handleDiscardRecovery = async () => {
+    await (window as any).electronAPI?.clearRecoverySnapshot?.();
+    recoveryActiveRef.current = false;
+    setRecoverySnapshot(null);
+    setIsRecoveryPromptOpen(false);
+    setRecoveryError(undefined);
+    continueStartupRef.current();
+  };
 
   const handleClearRecentDocuments = useCallback(() => {
     clearRecentDocuments();
@@ -2664,7 +3237,7 @@ export default function App() {
   }, []);
 
   const handleCloseAllDocuments = useCallback(() => {
-    const dirtyDocs = openDocuments.filter((d) => d.isDirty);
+    const dirtyDocs = openDocuments.filter(hasUnsavedDocumentChanges);
     if (dirtyDocs.length > 0) {
       setUnsavedDocModal({
         isOpen: true,
@@ -2812,8 +3385,8 @@ export default function App() {
     }
   };
 
-  const handleExitApp = useCallback(() => {
-    const dirtyDocs = openDocuments.filter((d) => d.isDirty);
+  const handleExitApp = useCallback(async () => {
+    const dirtyDocs = openDocuments.filter(hasUnsavedDocumentChanges);
     if (dirtyDocs.length > 0) {
       setUnsavedDocModal({
         isOpen: true,
@@ -2823,6 +3396,7 @@ export default function App() {
       });
       return;
     }
+    await (window as any).electronAPI?.clearRecoverySnapshot?.();
     exitDesktopApplication();
   }, [openDocuments]);
 
@@ -2842,6 +3416,13 @@ export default function App() {
           target.tagName === 'SELECT' ||
           target.isContentEditable ||
           target.getAttribute('contenteditable') === 'true');
+
+      if (e.key === 'F3') {
+        if (isInputFocused || document.querySelector('[role="dialog"], [aria-modal="true"]')) return;
+        e.preventDefault();
+        handleZoomFit();
+        return;
+      }
 
       // 1. GLOBAL SHORTCUTS (Active even when input/form has focus)
       if (e.ctrlKey || e.metaKey) {
@@ -2879,17 +3460,17 @@ export default function App() {
           return;
         }
 
-        // Ctrl + N -> New Document Wizard
+        // Ctrl + N -> New Document Wizard (with unsaved changes safety)
         if (!isInputFocused && (e.key === 'n' || e.key === 'N')) {
           e.preventDefault();
-          setIsNewDocWizardOpen(true);
+          handleRequestNewDocument();
           return;
         }
 
-        // Ctrl + O -> Open Native BarcodeFlow Document
+        // Ctrl + O -> Open Native BarcodeFlow Document (with unsaved changes safety)
         if (!isInputFocused && (e.key === 'o' || e.key === 'O')) {
           e.preventDefault();
-          handleOpenDocumentFile();
+          handleRequestOpenDocumentFile();
           return;
         }
 
@@ -2959,11 +3540,13 @@ export default function App() {
           return;
         } else if (e.key === '=' || e.key === '+') {
           e.preventDefault();
-          setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }));
+          handleManualViewportChange();
+          setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, MAX_VIEW_ZOOM) }));
           return;
         } else if (e.key === '-') {
           e.preventDefault();
-          setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, 0.25) }));
+          handleManualViewportChange();
+          setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, MIN_VIEW_ZOOM) }));
           return;
         } else if (e.key === '0') {
           e.preventDefault();
@@ -2991,6 +3574,11 @@ export default function App() {
 
         // Escape key: if modal open, do not interfere; if on canvas, clear selection & reset tool
         if (e.key === 'Escape') {
+          if (activeTool === 'zoom-rect') {
+            e.preventDefault();
+            handleExitZoomRectangle();
+            return;
+          }
           if (!isInputFocused) {
             setSelectedElementIds([]);
             setActiveTool('select');
@@ -3027,6 +3615,9 @@ export default function App() {
         } else if (e.key === 'F12') {
           e.preventDefault();
           setIsBarcodePropertiesOpen(true);
+        } else if (e.altKey && (e.key === 'F11' || e.key === 's' || e.key === 'S')) {
+          e.preventDefault();
+          setIsScriptEditorOpen(true);
         } else if (e.key === 'F8' || (e.altKey && e.key === 'Enter')) {
           e.preventDefault();
           const selEl = currentTemplate.elements.find((el) => selectedElementIds.includes(el.id));
@@ -3060,8 +3651,8 @@ export default function App() {
                 const el = currentTemplate.elements.find((item) => item.id === id)!;
                 const maxX = Math.max(0, currentTemplate.dimensions.width - el.width);
                 const maxY = Math.max(0, currentTemplate.dimensions.height - el.height);
-                const nextX = Math.min(maxX, Math.max(0, Number(((el.x || 0) + dx).toFixed(2))));
-                const nextY = Math.min(maxY, Math.max(0, Number(((el.y || 0) + dy).toFixed(2))));
+                const nextX = dx === 0 ? el.x : Math.min(maxX, Math.max(0, Number(((el.x || 0) + dx).toFixed(2))));
+                const nextY = dy === 0 ? el.y : Math.min(maxY, Math.max(0, Number(((el.y || 0) + dy).toFixed(2))));
                 return { id, updates: { x: nextX, y: nextY } };
               });
             if (updates.length > 0) {
@@ -3093,6 +3684,9 @@ export default function App() {
     handleDeleteSelected,
     handleSelectAll,
     handleZoomFit,
+    handleManualViewportChange,
+    handleExitZoomRectangle,
+    activeTool,
     handleOpenDocumentFile,
     handleSaveDocumentAs,
     updateMultipleElements,
@@ -3117,30 +3711,23 @@ export default function App() {
     return [];
   }, [currentTemplate?.databaseConnection?.records, boundDataset?.records, currentTemplate?.sampleRecords]);
 
-  // Section 10.15, 10.16, 10.23: Visible record set with preserved source identity
+  // Section 10.15, 10.16, 10.23 + spec 23/24: Visible record set driven by the
+  // centralized Record Set Engine (structured filters + search + multi-field sort)
+  // with preserved source identity so selection/print/save refer to physical rows.
   const visibleRecordSet = useMemo(() => {
-    const headerRow = currentTemplate?.databaseConnection?.headerRow || 1;
-    const indexed = rawActiveRecords.map((rec, i) => ({
-      data: rec,
-      sourceRecordIndex: i,
-      sourceRowNumber: i + headerRow + 1,
-      displayedRecordNumber: i + 1,
-    }));
-
-    if (!recordSearchFilter.trim()) {
-      return indexed;
-    }
-
-    const q = recordSearchFilter.trim().toLowerCase();
-    const filtered = indexed.filter((item) =>
-      Object.values(item.data).some((val) => String(val ?? '').toLowerCase().includes(q))
-    );
-
-    return filtered.map((item, idx) => ({
-      ...item,
-      displayedRecordNumber: idx + 1,
-    }));
-  }, [rawActiveRecords, recordSearchFilter, currentTemplate?.databaseConnection?.headerRow]);
+    return buildVisibleRecordSet(rawActiveRecords, {
+      headerRow: currentTemplate?.databaseConnection?.headerRow || 1,
+      search: recordSearchFilter,
+      filters: currentTemplate?.databaseConnection?.recordFilters,
+      sort: currentTemplate?.databaseConnection?.recordSort,
+    });
+  }, [
+    rawActiveRecords,
+    recordSearchFilter,
+    currentTemplate?.databaseConnection?.headerRow,
+    currentTemplate?.databaseConnection?.recordFilters,
+    currentTemplate?.databaseConnection?.recordSort,
+  ]);
 
   const totalVisibleRecords = visibleRecordSet.length;
 
@@ -3157,8 +3744,46 @@ export default function App() {
   }, [totalVisibleRecords, viewport.previewRecordIndex]);
 
   const activeRecordMeta = visibleRecordSet[safePreviewIndex] || null;
-  const currentRecordData = activeRecordMeta ? activeRecordMeta.data : (rawActiveRecords[0] || {});
-  const activeDatasetRecords = visibleRecordSet.length > 0 ? visibleRecordSet.map((r) => r.data) : [{}];
+
+  // Calculated fields (spec 17): resolve derived fields so they behave like real
+  // columns everywhere (canvas, record browser, print). Zero cost when unused.
+  const calculatedFieldDefs = currentTemplate.calculatedFields;
+  const currentRecordData = useMemo(() => {
+    const base = activeRecordMeta ? activeRecordMeta.data : (rawActiveRecords[0] || {});
+    if (!calculatedFieldDefs || calculatedFieldDefs.length === 0) return base;
+    return resolveCalculatedFields(base, calculatedFieldDefs, {
+      namedSources: currentTemplate.namedDataSources
+        ? Object.fromEntries(currentTemplate.namedDataSources.map((n) => [n.name, n.defaultValue]))
+        : undefined,
+      system: { currentRecordIndex: safePreviewIndex, totalRecords: totalVisibleRecords },
+    });
+  }, [activeRecordMeta, rawActiveRecords, calculatedFieldDefs, currentTemplate.namedDataSources, safePreviewIndex, totalVisibleRecords]);
+
+  const activeDatasetRecords = useMemo(() => {
+    const base = visibleRecordSet.length > 0 ? visibleRecordSet.map((r) => r.data) : [{}];
+    if (!calculatedFieldDefs || calculatedFieldDefs.length === 0) return base;
+    const namedSources = currentTemplate.namedDataSources
+      ? Object.fromEntries(currentTemplate.namedDataSources.map((n) => [n.name, n.defaultValue]))
+      : undefined;
+    return base.map((rec, i) =>
+      resolveCalculatedFields(rec, calculatedFieldDefs, {
+        namedSources,
+        system: { currentRecordIndex: i, totalRecords: base.length },
+      })
+    );
+  }, [visibleRecordSet, calculatedFieldDefs, currentTemplate.namedDataSources]);
+
+  // Document Lifecycle Event: OnNewRecord
+  useEffect(() => {
+    if (currentTemplate && activeDatasetRecords.length > 0) {
+      const rec = activeDatasetRecords[safePreviewIndex] || activeDatasetRecords[0];
+      documentEventDispatcher.dispatch('OnNewRecord', currentTemplate, {
+        databaseRecord: rec,
+        recordIndex: safePreviewIndex,
+        totalRecords: activeDatasetRecords.length,
+      });
+    }
+  }, [safePreviewIndex, currentTemplateId, activeDatasetRecords.length]);
 
   // Unified datasets list combining global datasets + currentTemplate.databaseConnection
   const combinedDatasets = useMemo(() => {
@@ -3705,9 +4330,10 @@ export default function App() {
       {activeView === 'designer' && (
         <ErrorBoundary fallbackTitle="BarcodeFlow Designer Studio Recovery">
           <MenuBar
-            onNew={() => setIsNewDocWizardOpen(true)}
+            onNew={handleRequestNewDocument}
             onOpenPrinterManager={() => setIsPrinterManagerOpen(true)}
-            onOpen={handleOpenDocumentFile}
+            onOpen={handleRequestOpenDocumentFile}
+            onImportBarTender={() => setBarTenderModal({ isOpen: true })}
             onCloseDocument={() => handleCloseTab(activeDocumentInstanceId)}
             onCloseAllDocuments={handleCloseAllDocuments}
             onSave={handleSaveTemplate}
@@ -3722,7 +4348,7 @@ export default function App() {
             onOpenSerializationRecovery={() => setIsSerializationRecoveryModalOpen(true)}
             orphanCount={orphanReservationsCount}
             recentDocuments={recentDocuments}
-            onOpenRecentDocument={handleOpenRecentDocument}
+            onOpenRecentDocument={handleRequestOpenRecentDocument}
             onClearRecentDocuments={handleClearRecentDocuments}
             onExitApp={handleExitApp}
             onExportPDF={handleExportPDF}
@@ -3739,10 +4365,20 @@ export default function App() {
             onDelete={handleDeleteSelected}
             onSelectAll={handleSelectAll}
             onDuplicate={handleDuplicateSelected}
-            onZoomIn={() => setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }))}
-            onZoomOut={() => setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, 0.25) }))}
+            onZoomIn={() => {
+              handleManualViewportChange();
+              setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, MAX_VIEW_ZOOM) }));
+            }}
+            onZoomOut={() => {
+              handleManualViewportChange();
+              setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, MIN_VIEW_ZOOM) }));
+            }}
             onZoomFit={handleZoomFit}
-            onZoom100={() => setViewport((prev) => ({ ...prev, zoom: 1.0 }))}
+            canZoomViewport={!!activeDocumentInstanceId && activeView === 'designer'}
+            onZoom100={() => {
+              handleManualViewportChange();
+              setViewport((prev) => ({ ...prev, zoom: 1.0 }));
+            }}
             onToggleGrid={() => setViewport((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
             onToggleRulers={() => setViewport((prev) => ({ ...prev, showRulers: !prev.showRulers }))}
             onToggleGuides={() => setViewport((prev) => ({ ...prev, showGuides: !prev.showGuides }))}
@@ -3803,7 +4439,8 @@ export default function App() {
             onOpenGs1Wizard={() => setIsGs1WizardOpen(true)}
             onPageSetup={() => setIsPageSetupOpen(true)}
             onOpenNamedDataSources={() => setIsNamedDataSourcesOpen(true)}
-            onOpenDocumentScripts={() => setIsDocumentScriptsOpen(true)}
+            onOpenDocumentScripts={() => setIsScriptEditorOpen(true)}
+            onOpenScriptEditor={() => setIsScriptEditorOpen(true)}
             onOpenFormulaBuilder={() => setIsFormulaBuilderOpen(true)}
             onOpenDataEntryFormDesigner={() => setIsDataEntryDesignerOpen(true)}
             onOpenDataEntryRuntime={() => setIsDataEntryRuntimeOpen(true)}
@@ -3889,10 +4526,21 @@ export default function App() {
               onInsertImage={handleInsertImage}
               onInsertGS1Block={() => setIsGs1WizardOpen(true)}
               onOpenBarcodePicker={() => setIsBarcodePickerOpen(true)}
-              onZoomIn={() => setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, 4.0) }))}
-              onZoomOut={() => setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, 0.25) }))}
-              onZoom100={() => setViewport((prev) => ({ ...prev, zoom: 1.0 }))}
+              onZoomIn={() => {
+                handleManualViewportChange();
+                setViewport((prev) => ({ ...prev, zoom: Math.min(prev.zoom + 0.25, MAX_VIEW_ZOOM) }));
+              }}
+              onZoomOut={() => {
+                handleManualViewportChange();
+                setViewport((prev) => ({ ...prev, zoom: Math.max(prev.zoom - 0.25, MIN_VIEW_ZOOM) }));
+              }}
+              onZoom100={() => {
+                handleManualViewportChange();
+                setViewport((prev) => ({ ...prev, zoom: 1.0 }));
+              }}
               onZoomFit={handleZoomFit}
+              onZoomToRectangle={handleActivateZoomRectangle}
+              canZoomViewport={!!activeDocumentInstanceId && activeView === 'designer'}
               showGrid={viewport.showGrid}
               onToggleGrid={() => setViewport((prev) => ({ ...prev, showGrid: !prev.showGrid }))}
               showRulers={viewport.showRulers}
@@ -3919,9 +4567,22 @@ export default function App() {
                 }
               }}
               selectedElement={currentTemplate.elements.find((e) => selectedElementIds.includes(e.id))}
+              selectedElements={currentTemplate.elements.filter((e) => selectedElementIds.includes(e.id))}
               onUpdateSelectedElement={(updates) => {
-                if (selectedElementIds.length > 0) {
+                if (selectedElementIds.length === 1) {
                   updateSingleElement(selectedElementIds[0], updates);
+                } else if (selectedElementIds.length > 1) {
+                  updateMultipleElements(
+                    selectedElementIds.map((id) => ({ id, updates })),
+                    false
+                  );
+                }
+              }}
+              onUpdateSelectedElements={(updates) => {
+                if (updates.length === 1) {
+                  updateSingleElement(updates[0].id, updates[0].updates);
+                } else if (updates.length > 1) {
+                  updateMultipleElements(updates, false);
                 }
               }}
               templateDimensions={currentTemplate.dimensions}
@@ -4065,10 +4726,16 @@ export default function App() {
                   ) : (
                     <DesignerCanvas
                       template={currentTemplate}
+                      onRegisterFitToWindow={registerFitToWindow}
+                      onRegisterExitFitMode={registerExitFitMode}
+                      onExitZoomRectangle={handleExitZoomRectangle}
+                      onZoomRectangleTool={handleActivateZoomRectangle}
                       selectedElementIds={selectedElementIds}
                       onSelectElements={setSelectedElementIds}
                       onUpdateElement={updateSingleElement}
                       onUpdateMultipleElements={updateMultipleElements}
+                      onCommitHistory={commitHistory}
+                      onRestoreElement={original => updateTemplate({ elements: currentTemplate.elements.map(element => element.id === original.id ? structuredClone(original) : element) })}
                       onDeleteSelected={handleDeleteSelected}
                       onDuplicateSelected={handleDuplicateSelected}
                       onCut={handleCut}
@@ -4106,6 +4773,14 @@ export default function App() {
                       onOpenBarcodeProperties={() => {
                         setBarcodePropsInitialCategory('symbology');
                         setIsBarcodePropertiesOpen(true);
+                      }}
+                      onOpenRichTextEditor={(textEl) => {
+                        setRichTextTargetElement(textEl);
+                        setIsRichTextModalOpen(true);
+                      }}
+                      onOpenSymbolPicker={(textEl) => {
+                        setSymbolTargetElement(textEl);
+                        setIsSymbolPickerOpen(true);
                       }}
                       onOpenPageSetup={() => setIsPageSetupOpen(true)}
                       onInsertElementAt={(elPartial, xMm, yMm) => {
@@ -4551,7 +5226,10 @@ export default function App() {
                   templateId: targetJob?.templateId || currentTemplate.id,
                   printerId: targetPrinter?.id || printers[0].id,
                   copies: count,
-                  records: targetJob?.pages?.map((p) => ({ SERIAL_NO: p.serialNumber, PRODUCT_NAME: p.productName })) || [{}],
+                  records: targetJob?.pages?.map((page: { serialNumber?: string; productName?: string }) => ({
+                    SERIAL_NO: page.serialNumber,
+                    PRODUCT_NAME: page.productName,
+                  })) || [{}],
                   format: 'zpl',
                   submittedBy: currentUser.name,
                 }),
@@ -4623,6 +5301,7 @@ export default function App() {
 
       <BarcodePickerModal
         isOpen={isBarcodePickerOpen}
+        currentSymbology={currentTemplate.elements.find((element): element is BarcodeElement => element.id === selectedElementIds[0] && element.type === 'barcode')?.symbology}
         onClose={() => setIsBarcodePickerOpen(false)}
         onSelectSymbology={(sym) => {
           if (selectedElementIds.length > 0) {
@@ -4647,6 +5326,7 @@ export default function App() {
         recordData={currentRecordData}
         activeRecordIndex={viewport.previewRecordIndex}
         selectedRecordIndices={selectedRecordIndices}
+        visibleRecords={activeDatasetRecords}
         onOpenDatabaseSetup={() => setIsDatabaseConnectionModalOpen(true)}
         onUpdateTemplate={(updatedTmpl) => updateTemplate(updatedTmpl)}
         onOpenPrintPreview={(opts) => {
@@ -4702,8 +5382,8 @@ export default function App() {
           effectiveDpi={printPreviewOptions?.effectiveDpi ?? 300}
           recordsToPrint={
             printPreviewOptions?.recordsToPrint ||
-            (currentTemplate.databaseConnection?.records?.length
-              ? currentTemplate.databaseConnection.records
+            (activeDatasetRecords.length && activeDatasetRecords.some((r) => r && Object.keys(r).length > 0)
+              ? activeDatasetRecords
               : [currentRecordData])
           }
           copies={printPreviewOptions?.copies || 1}
@@ -4789,26 +5469,6 @@ export default function App() {
         }}
       />
 
-      {/* Multi-Document Unsaved Changes Confirmation Modal */}
-      {unsavedDocModal && (
-        <UnsavedChangesModal
-          isOpen={unsavedDocModal.isOpen}
-          documentName={unsavedDocModal.documentName}
-          onSave={async () => {
-            const instId = unsavedDocModal.instanceId;
-            await handleSaveDocument(instId);
-            setUnsavedDocModal(null);
-            handlePerformCloseTab(instId);
-          }}
-          onDontSave={() => {
-            const instId = unsavedDocModal.instanceId;
-            setUnsavedDocModal(null);
-            handlePerformCloseTab(instId);
-          }}
-          onCancel={() => setUnsavedDocModal(null)}
-        />
-      )}
-
       {/* P0-8: Missing / Preferred Printer Unavailable Alert Modal */}
       {missingPrinterModal?.isOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -4824,7 +5484,7 @@ export default function App() {
               <button
                 onClick={() => {
                   setMissingPrinterModal(null);
-                  setIsPrintDialogOpen(true);
+                  setIsPrinterManagerOpen(true);
                 }}
                 className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium text-sm transition-colors text-center"
               >
@@ -4845,15 +5505,17 @@ export default function App() {
                                 systemName: defaultPrinter.systemName || defaultPrinter.name,
                                 driverName: defaultPrinter.driverName,
                                 portName: defaultPrinter.portName || defaultPrinter.port,
-                                dpi: defaultPrinter.dpi,
+                                dpi: defaultPrinter.dpi || t.dimensions.dpi,
                                 renderer: defaultPrinter.preferredRenderer || 'WINDOWS_DRIVER',
+                                isAvailable: true,
+                                sourcePrinterName: t.printer?.sourcePrinterName || t.printer?.name,
                               },
                             }
                           : t
                       )
                     );
                     setMissingPrinterModal(null);
-                    showToast(`Switched to Windows default: ${defaultPrinter.name}`, 'info');
+                    showToast(`Switched to Windows default: ${defaultPrinter.name} (geometry preserved)`, 'info');
                   }}
                   className="w-full px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg font-medium text-sm transition-colors text-center"
                 >
@@ -4875,7 +5537,30 @@ export default function App() {
         isOpen={isPrinterManagerOpen}
         onClose={() => setIsPrinterManagerOpen(false)}
         onPrinterSelected={(p) => {
-          showToast(`Selected "${p.name}" as active printer`, 'info');
+          setActivePrinter(p);
+          setTemplates((prev) =>
+            prev.map((t) =>
+              t.id === currentTemplateId
+                ? {
+                    ...t,
+                    printer: {
+                      id: p.id,
+                      name: p.name,
+                      systemName: p.systemName || p.name,
+                      model: p.model,
+                      driverName: p.driverName,
+                      portName: p.portName,
+                      dpi: p.dpi || t.dimensions.dpi,
+                      renderer: p.preferredRenderer || 'WINDOWS_DRIVER',
+                      isAvailable: true,
+                      sourcePrinterName: t.printer?.sourcePrinterName || t.printer?.name,
+                    },
+                  }
+                : t
+            )
+          );
+          setIsPrinterManagerOpen(false);
+          showToast(`Assigned printer "${p.name}" (label dimensions preserved)`, 'success');
         }}
       />
 
@@ -4952,6 +5637,10 @@ export default function App() {
         isOpen={isBarcodePropertiesOpen}
         onClose={() => setIsBarcodePropertiesOpen(false)}
         initialCategory={barcodePropsInitialCategory}
+        allElements={currentTemplate.elements}
+        selectedElementIds={selectedElementIds}
+        onSelectElement={(id) => setSelectedElementIds([id])}
+        activeDocumentName={currentTemplate.name}
         element={
           (currentTemplate.elements.find((e) => selectedElementIds.includes(e.id) && e.type === 'barcode') ||
             currentTemplate.elements.find((e) => e.type === 'barcode') ||
@@ -4989,6 +5678,11 @@ export default function App() {
         currentRecord={currentRecordData}
         currentConnection={currentTemplate.databaseConnection}
         onConnectDataset={handleConnectDatasetToTemplate}
+        namedDataSources={currentTemplate.namedDataSources}
+        calculatedFields={currentTemplate.calculatedFields}
+        globalData={(currentTemplate as any).globalData}
+        currentRecordIndex={safePreviewIndex}
+        totalRecords={totalVisibleRecords}
       />
 
       {/* BarTender Data Edit Modal (Screenshot 5) */}
@@ -5281,6 +5975,48 @@ export default function App() {
         currentRecord={currentRecordData}
         currentConnection={currentTemplate.databaseConnection}
         onConnectDataset={handleConnectDatasetToTemplate}
+        namedDataSources={currentTemplate.namedDataSources}
+        calculatedFields={currentTemplate.calculatedFields}
+        elements={currentTemplate.elements}
+        globalData={(currentTemplate as any).globalData}
+        currentRecordIndex={safePreviewIndex}
+        totalRecords={totalVisibleRecords}
+        template={currentTemplate}
+      />
+
+      {/* Rich Text & Markup Editor Modal */}
+      <RichTextEditorModal
+        isOpen={isRichTextModalOpen}
+        onClose={() => {
+          setIsRichTextModalOpen(false);
+          setRichTextTargetElement(null);
+        }}
+        element={richTextTargetElement}
+        onSave={(id, updates) => {
+          updateSingleElement(id, updates);
+          showToast('Updated rich text container', 'success');
+        }}
+      />
+
+      {/* Symbol Font Characters Picker Modal */}
+      <SpecialCharacterModal
+        isOpen={isSymbolPickerOpen}
+        onClose={() => {
+          setIsSymbolPickerOpen(false);
+          setSymbolTargetElement(null);
+        }}
+        currentFont={symbolTargetElement?.fontFamily || 'Arial'}
+        onInsert={(char) => {
+          if (symbolTargetElement) {
+            updateSingleElement(symbolTargetElement.id, {
+              text: char,
+              symbolUnicode: char,
+            });
+            showToast(`Inserted symbol: ${char}`, 'success');
+          }
+          setIsSymbolPickerOpen(false);
+          setSymbolTargetElement(null);
+        }}
       />
 
       {/* Shape Properties Modal */}
@@ -5319,6 +6055,11 @@ export default function App() {
         isOpen={isDocumentScriptsOpen}
         onClose={() => setIsDocumentScriptsOpen(false)}
         initialScripts={(currentTemplate as any).eventScripts || {}}
+        availableFields={
+          currentTemplate.databaseConnection?.fields ||
+          Object.keys(currentRecordData || {}).filter((k) => !k.startsWith('__'))
+        }
+        namedSources={currentTemplate.namedDataSources?.map((n) => ({ name: n.name })) || []}
         onSaveScripts={(scripts) => {
           updateTemplate({
             ...currentTemplate,
@@ -5326,6 +6067,21 @@ export default function App() {
           } as any);
           showToast('Saved Document Event Scripts to template', 'success');
         }}
+      />
+
+      {/* BarTender Desktop Script Editor Modal */}
+      <ScriptEditorModal
+        isOpen={isScriptEditorOpen}
+        onClose={() => setIsScriptEditorOpen(false)}
+        template={currentTemplate}
+        onUpdateTemplate={(updated) => {
+          updateTemplate(updated);
+          showToast('Updated template scripts', 'success');
+        }}
+        selectedObjectId={selectedElementIds[0]}
+        currentRecord={currentRecordData}
+        databaseRecords={activeDatasetRecords}
+        activeRecordIndex={safePreviewIndex}
       />
 
       {/* Formula & Expression Builder Modal */}
@@ -5583,13 +6339,15 @@ export default function App() {
         isOpen={isRecordBrowserOpen}
         onClose={() => setIsRecordBrowserOpen(false)}
         dataset={
-          currentTemplate.databaseConnection || {
-            id: 'sample-ds',
-            name: currentTemplate.name,
-            type: 'sample',
-            fields: Object.keys(activeDatasetRecords[0] || {}),
-            records: activeDatasetRecords,
-          }
+          currentTemplate.databaseConnection
+            ? { ...currentTemplate.databaseConnection, records: activeDatasetRecords }
+            : {
+                id: 'sample-ds',
+                name: currentTemplate.name,
+                type: 'sample',
+                fields: Object.keys(activeDatasetRecords[0] || {}),
+                records: activeDatasetRecords,
+              }
         }
         activeRecordIndex={viewport.previewRecordIndex}
         onSelectActiveRecord={(idx) => {
@@ -5605,34 +6363,91 @@ export default function App() {
         onSelectAll={(indices) => setSelectedRecordIndices(indices)}
         onClearSelection={() => setSelectedRecordIndices([])}
         onOpenPrintDialog={() => setIsPrintDialogOpen(true)}
+        initialFilters={currentTemplate.databaseConnection?.recordFilters}
+        initialSort={currentTemplate.databaseConnection?.recordSort}
+        onApplyQuery={(filters, sort) => {
+          if (!currentTemplate.databaseConnection) {
+            showToast('Connect a data source before applying a query.', 'info');
+            return;
+          }
+          updateTemplate({
+            databaseConnection: {
+              ...currentTemplate.databaseConnection,
+              recordFilters: filters,
+              recordSort: sort,
+            },
+          });
+          setViewport((v) => ({ ...v, previewRecordIndex: 0 }));
+          setSelectedRecordIndices([]);
+          const parts: string[] = [];
+          if (filters.length) parts.push(`${filters.length} filter${filters.length > 1 ? 's' : ''}`);
+          if (sort.length) parts.push(`${sort.length} sort field${sort.length > 1 ? 's' : ''}`);
+          showToast(parts.length ? `Applied ${parts.join(' + ')} to record set` : 'Cleared query — showing all records', 'success');
+        }}
       />
 
       {/* Save As BarTender Modal */}
       <SaveAsModal
         isOpen={isSaveAsModalOpen}
         initialName={currentTemplate.name}
-        onSave={(newName, desc) => handleSaveDocumentAs(activeDocumentInstanceId, newName, desc)}
+        onSave={async (newName, desc) => {
+          await handleSaveDocumentAs(activeDocumentInstanceId, newName, desc);
+        }}
         onClose={() => setIsSaveAsModalOpen(false)}
       />
 
       {/* Unsaved Changes Confirmation Modal */}
       <UnsavedChangesModal
         isOpen={!!unsavedDocModal?.isOpen}
-        documentName={unsavedDocModal?.documentName || 'Document'}
+        documentName={unsavedDocModal?.action === 'closeAll' ? 'all open documents' : unsavedDocModal?.documentName || 'Document'}
         onSave={async () => {
-          if (unsavedDocModal?.instanceId) {
-            await handleSaveDocument(unsavedDocModal.instanceId);
-            handlePerformCloseTab(unsavedDocModal.instanceId);
+          const pendingAction = unsavedDocModal?.action;
+          const pendingTarget = unsavedDocModal?.targetPath;
+          const pendingInstId = unsavedDocModal?.instanceId;
+          if (pendingAction === 'closeAll') {
+            if (!(await handleSaveAllDocuments())) return;
+            setUnsavedDocModal(null);
+            exitDesktopApplication();
+            return;
+          }
+          if (pendingInstId && !(await handleSaveDocument(pendingInstId))) return;
+          setUnsavedDocModal(null);
+
+          if (pendingAction === 'close' && pendingInstId) {
+            handlePerformCloseTab(pendingInstId);
+          } else if (pendingAction === 'new') {
+            setIsNewDocWizardOpen(true);
+          } else if (pendingAction === 'open') {
+            handleOpenDocumentFile();
+          } else if (pendingAction === 'openRecent' && pendingTarget) {
+            handleOpenRecentDocument(pendingTarget);
+          }
+        }}
+        onDontSave={async () => {
+          const pendingAction = unsavedDocModal?.action;
+          const pendingTarget = unsavedDocModal?.targetPath;
+          const pendingInstId = unsavedDocModal?.instanceId;
+          setUnsavedDocModal(null);
+
+          if (pendingAction === 'close' && pendingInstId) {
+            handlePerformCloseTab(pendingInstId);
+          } else if (pendingAction === 'closeAll') {
+            await (window as any).electronAPI?.clearRecoverySnapshot?.();
+            exitDesktopApplication();
+          } else if (pendingAction === 'new') {
+            setIsNewDocWizardOpen(true);
+          } else if (pendingAction === 'open') {
+            handleOpenDocumentFile();
+          } else if (pendingAction === 'openRecent' && pendingTarget) {
+            handleOpenRecentDocument(pendingTarget);
+          }
+        }}
+        onCancel={() => {
+          if (unsavedDocModal?.action === 'closeAll') {
+            void (window as any).electronAPI?.cancelCloseRequest?.();
           }
           setUnsavedDocModal(null);
         }}
-        onDontSave={() => {
-          if (unsavedDocModal?.instanceId) {
-            handlePerformCloseTab(unsavedDocModal.instanceId);
-          }
-          setUnsavedDocModal(null);
-        }}
-        onCancel={() => setUnsavedDocModal(null)}
       />
 
       {/* New Document Wizard Modal */}
@@ -5641,13 +6456,14 @@ export default function App() {
         onClose={() => setIsNewDocWizardOpen(false)}
         currentUser={currentUser.name}
         onFinish={(newTpl) => {
+          const docTitle = newTpl.name || 'Untitled Document';
           const newDoc: OpenDocument = {
             instanceId: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
             documentId: newTpl.id,
             type: 'template',
-            name: newTpl.name || 'Untitled Document',
+            name: docTitle,
             isDirty: false,
-            isNew: false,
+            isNew: true, // Marked as new untitled document awaiting first Save As
             template: newTpl,
             selectedElementIds: [],
             history: { entries: [newTpl.elements || []], index: 0 },
@@ -5655,7 +6471,18 @@ export default function App() {
             dataState: { currentRecordIndex: 0, selectedRecordIndices: [] },
           };
           setTemplates((prev) => [newTpl, ...prev]);
-          setOpenDocuments((prev) => [...prev, newDoc]);
+          setOpenDocuments((prev) => {
+            if (
+              prev.length === 1 &&
+              !hasUnsavedDocumentChanges(prev[0]) &&
+              !prev[0].filePath &&
+              prev[0].name.toLowerCase().includes('document1') &&
+              (prev[0].template?.elements?.length || 0) <= 2
+            ) {
+              return [newDoc];
+            }
+            return [...prev, newDoc];
+          });
           setActiveDocumentInstanceId(newDoc.instanceId);
           setCurrentTemplateId(newTpl.id);
           setSelectedElementIds([]);
@@ -5663,7 +6490,10 @@ export default function App() {
           setHistoryIndex(0);
           setViewport((prev) => ({ ...prev, previewRecordIndex: 0 }));
           setIsNewDocWizardOpen(false);
-          showToast(`Created document "${newTpl.name}"`, 'success');
+          showToast(`Created document "${docTitle}"`, 'success');
+          if (typeof document !== 'undefined') {
+            document.title = `${docTitle} - BarcodeFlow Enterprise`;
+          }
         }}
       />
 
@@ -5699,14 +6529,29 @@ export default function App() {
       <WelcomeModal
         isOpen={isWelcomeOpen}
         onClose={() => setIsWelcomeOpen(false)}
-        onNewDocument={() => setIsNewDocWizardOpen(true)}
-        onOpenExisting={handleOpenDocumentFile}
-        onOpenRecentDocument={handleOpenRecentDocument}
+        onNewDocument={handleRequestNewDocument}
+        onOpenExisting={handleRequestOpenDocumentFile}
+        onOpenRecentDocument={handleRequestOpenRecentDocument}
         recentDocuments={recentDocuments}
         onRefreshRecent={() => setRecentDocuments(getRecentDocuments())}
         showWelcomeOnStartup={showWelcomeOnStartup}
         onToggleShowWelcomeOnStartup={handleToggleShowWelcomeOnStartup}
       />
+
+      {recoverySnapshot && isRecoveryPromptOpen && (
+        <DocumentRecoveryModal
+          savedAt={recoverySnapshot.savedAt}
+          documentNames={recoverySnapshot.documents.map((entry: any) => entry.name || 'Untitled document')}
+          error={recoveryError}
+          onRecover={handleRecoverDocuments}
+          onDiscard={handleDiscardRecovery}
+          onClose={() => {
+            recoveryActiveRef.current = false;
+            setIsRecoveryPromptOpen(false);
+            continueStartupRef.current();
+          }}
+        />
+      )}
 
       {/* BarTender .BTW Import Guidance Modal */}
       <BarTenderImportModal
@@ -5726,6 +6571,74 @@ export default function App() {
           setBarTenderModal({ isOpen: false });
           setIsNewDocWizardOpen(true);
         }}
+        onSelectSupportedInterchange={() => {
+          setBarTenderModal({ isOpen: false });
+          handleRequestOpenDocumentFile();
+        }}
+        onExtractWithBarTender={handleRequestOpenDocumentFile}
+      />
+
+      {/* BarTender Structured Import Report Modal */}
+      <BarTenderImportReportModal
+        isOpen={isBtwImportReportOpen}
+        onClose={() => setIsBtwImportReportOpen(false)}
+        report={btwImportReport}
+        documentName={currentTemplate.name}
+        currentPrinterName={currentTemplate.printer?.name}
+        isPrinterAvailable={Boolean(
+          availablePrinters.some(
+            (p) =>
+              p.name.toLowerCase() === (currentTemplate.printer?.name || '').toLowerCase() ||
+              (p.systemName && currentTemplate.printer?.systemName && p.systemName.toLowerCase() === currentTemplate.printer.systemName.toLowerCase()) ||
+              p.id === currentTemplate.printer?.id
+          )
+        )}
+        defaultPrinterName={defaultPrinter?.name || availablePrinters.find((p) => p.isDefault)?.name}
+        onContinue={() => {
+          setIsBtwImportReportOpen(false);
+          setMissingPrinterModal(null);
+        }}
+        onSelectAnotherPrinter={() => {
+          setIsBtwImportReportOpen(false);
+          setMissingPrinterModal(null);
+          setIsPrinterManagerOpen(true);
+        }}
+        onUseDefaultPrinter={() => {
+          const targetDefault = defaultPrinter || availablePrinters.find((p) => p.isDefault) || availablePrinters[0];
+          if (targetDefault) {
+            setActivePrinter(targetDefault);
+            setTemplates((prev) =>
+              prev.map((t) =>
+                t.id === currentTemplateId
+                  ? {
+                      ...t,
+                      printer: {
+                        id: targetDefault.id,
+                        name: targetDefault.name,
+                        systemName: targetDefault.systemName || targetDefault.name,
+                        driverName: targetDefault.driverName,
+                        portName: targetDefault.portName || targetDefault.port,
+                        dpi: targetDefault.dpi || t.dimensions.dpi,
+                        renderer: targetDefault.preferredRenderer || 'WINDOWS_DRIVER',
+                        isAvailable: true,
+                        sourcePrinterName: t.printer?.sourcePrinterName || t.printer?.name,
+                      },
+                    }
+                  : t
+              )
+            );
+            showToast(`Assigned default printer: ${targetDefault.name} (geometry preserved)`, 'info');
+          }
+        }}
+      />
+
+      {/* BarTender / Document Import Progress State Machine Modal */}
+      <DocumentImportProgressModal
+        state={importState}
+        fileName={importFileName}
+        errorMessage={importErrorMessage}
+        stats={importStats}
+        onClose={() => setImportState('IDLE')}
       />
     </div>
   );

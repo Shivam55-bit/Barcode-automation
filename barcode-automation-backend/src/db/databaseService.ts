@@ -5,6 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import { IDatabaseProvider } from './interfaces';
 import { SqliteDatabaseProvider } from './sqliteProvider';
+import { getDataDirectory } from '../runtimePaths';
 
 export class DatabaseService {
   private static instance: DatabaseService;
@@ -13,7 +14,7 @@ export class DatabaseService {
   private isInitialized = false;
 
   private constructor() {
-    this.dataDir = path.resolve(process.cwd(), 'barcode-automation-backend/data');
+    this.dataDir = getDataDirectory();
     if (!fs.existsSync(this.dataDir)) {
       fs.mkdirSync(this.dataDir, { recursive: true });
     }

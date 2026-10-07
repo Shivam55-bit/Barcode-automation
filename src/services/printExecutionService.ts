@@ -1,4 +1,4 @@
-import { LabelTemplate, PrintCommitPolicy, PrintJobBatch, PrintJobItem } from '../types';
+import { LabelTemplate, PrintCommitPolicy, PrintJobBatch, PrintJobItem, PrinterCodeModifierConfig } from '../types';
 import { PrinterModel, SupportedRenderer } from '../printer/types';
 import { createPrintPlan, PrintPlan } from './printPlanService';
 import { generateWindowsDriverHtml } from '../printing/renderers/windowsDriverRenderer';
@@ -11,6 +11,72 @@ import { exportLabelsToPDF } from './pdfExportService';
 import { promptSavePdfFile } from './fileSavePromptService';
 import { getTelemetryProvider } from './telemetry/printerTelemetry';
 import { AtomicSerialReservationService } from './serializationEngine';
+import { executeDocumentEventScript, executeVBScript } from './vbscriptEngine';
+import { documentEventDispatcher } from './documentEventDispatcher';
+
+/**
+ * Applies Printer Code Modifiers (Prefix, Suffix, Search & Replace rules, and custom scripts)
+ * to raw printer code payloads (ZPL, TSPL, EPL, CPCL, SBPL) before spooling or file export.
+ */
+export function applyPrinterCodeModifiers(
+  payload: string,
+  config?: PrinterCodeModifierConfig
+): string {
+  if (!config || !config.enabled) {
+    return payload;
+  }
+
+  let result = payload;
+
+  // 1. Apply find-and-replace substitutions
+  if (config.substitutions && config.substitutions.length > 0) {
+    for (const sub of config.substitutions) {
+      if (!sub.find) continue;
+      try {
+        if (sub.isRegex) {
+          const regex = new RegExp(sub.find, 'g');
+          result = result.replace(regex, sub.replace || '');
+        } else {
+          result = result.split(sub.find).join(sub.replace || '');
+        }
+      } catch (err) {
+        console.warn('[PrintCodeModifier] Substitution error:', err);
+      }
+    }
+  }
+
+  // 2. Apply custom modifier script (VBScript / JavaScript)
+  if (config.customScript && config.customScript.trim()) {
+    try {
+      if (config.scriptLanguage === 'javascript') {
+        const fn = new Function('Value', 'Code', `${config.customScript}; return Value !== undefined ? Value : Code;`);
+        const scriptRes = fn(result, result);
+        if (scriptRes !== undefined && scriptRes !== null) {
+          result = String(scriptRes);
+        }
+      } else {
+        const vbRes = executeVBScript(config.customScript, { Value: result, Code: result });
+        if (vbRes.success && vbRes.value !== undefined) {
+          result = String(vbRes.value);
+        }
+      }
+    } catch (err) {
+      console.warn('[PrintCodeModifier] Script execution error:', err);
+    }
+  }
+
+  // 3. Prepend prefix if configured
+  if (config.prefix) {
+    result = config.prefix + result;
+  }
+
+  // 4. Append suffix if configured
+  if (config.suffix) {
+    result = result + config.suffix;
+  }
+
+  return result;
+}
 
 export interface PrintExecutionOptions {
   document: LabelTemplate;
@@ -171,6 +237,14 @@ export class PrintExecutionService {
     // 4. Resolve Target Renderer
     const targetRenderer: SupportedRenderer = rendererOverride || printer.preferredRenderer || 'WINDOWS_DRIVER';
 
+    // Lifecycle Event: OnPrintJobStart
+    documentEventDispatcher.dispatch('OnPrintJobStart', document, {
+      printerName: printer.name,
+      jobId: options.jobId,
+      totalRecords: dispatchedRecords.length,
+      totalPages: plan.totalPages,
+    });
+
     // 5. Audit "Print to File" Checkbox (Section 26)
     if (printToFile) {
       return await this.handlePrintToFile({
@@ -226,6 +300,9 @@ export class PrintExecutionService {
           batchPayload = renderSBPL(document, batchRecords as any, { copies: 1, dpi: effectiveDpi, darkness, speed });
         }
 
+        // Apply printer code modifiers if configured
+        batchPayload = applyPrinterCodeModifiers(batchPayload, document.codeModifierConfig);
+
         batches.push({
           batchIndex: b + 1,
           startIndex: sIdx,
@@ -247,6 +324,15 @@ export class PrintExecutionService {
           batch.status = 'submitting';
           batch.dispatchedAt = new Date().toISOString();
           
+          // Lifecycle Event: OnPrePrint
+          documentEventDispatcher.dispatch('OnPrePrint', document, {
+            printerName: printer.name,
+            jobId: options.jobId,
+            batchIndex: batch.batchIndex,
+            totalBatches: batches.length,
+            recordsCount: batch.count,
+          });
+
           try {
             const rawRes = await window.barcodeFlow.printers.printRaw({
               printerName: deviceName,
@@ -262,6 +348,13 @@ export class PrintExecutionService {
               for (let i = batch.startIndex; i <= batch.endIndex; i++) {
                 if (items[i]) items[i].status = 'printed';
               }
+              // Lifecycle Event: OnPostPrint
+              documentEventDispatcher.dispatch('OnPostPrint', document, {
+                printerName: printer.name,
+                jobId: options.jobId,
+                batchIndex: batch.batchIndex,
+                totalRecords: confirmedPrinted,
+              });
             } else {
               batch.status = 'failed';
               batchError = rawRes.error || 'Raw spooler write failure';
@@ -282,6 +375,22 @@ export class PrintExecutionService {
         console.groupEnd();
         const isPartial = failedBatchIndex !== null && confirmedPrinted > 0;
         const isFailed = failedBatchIndex !== null && confirmedPrinted === 0;
+
+        // Lifecycle Event: OnPrintJobEnd / OnPrintJobCancel
+        if (isFailed) {
+          documentEventDispatcher.dispatch('OnPrintJobCancel', document, {
+            printerName: printer.name,
+            jobId: options.jobId,
+            error: batchError,
+          });
+        } else {
+          documentEventDispatcher.dispatch('OnPrintJobEnd', document, {
+            printerName: printer.name,
+            jobId: options.jobId,
+            totalRecords: confirmedPrinted,
+            isPartial,
+          });
+        }
 
         return {
           status: isPartial ? 'PARTIAL' : isFailed ? 'failed' : 'submitted',
@@ -343,6 +452,21 @@ export class PrintExecutionService {
       });
 
       console.groupEnd();
+
+      // Lifecycle Event: OnEndJob
+      const eventScripts = (document as any).eventScripts || {};
+      if (driverRes.success && eventScripts.OnEndJob) {
+        try {
+          executeDocumentEventScript('OnEndJob', eventScripts, {
+            printerName: printer.name,
+            jobId: options.jobId,
+            totalRecords: dispatchedRecords.length,
+          });
+        } catch (e) {
+          console.warn('[EventScript] OnEndJob warning:', e);
+        }
+      }
+
       return {
         status: driverRes.success ? 'submitted' : (driverRes.cancelled ? 'cancelled' : 'failed'),
         printerName: printer.name,
@@ -674,6 +798,9 @@ export class PrintExecutionService {
       } else {
         code = renderEPL(document, dispatchedRecords as any, { copies: 1, dpi: effectiveDpi, density: darkness, speed });
       }
+
+      // Apply printer code modifiers
+      code = applyPrinterCodeModifiers(code, document.codeModifierConfig);
 
       if (typeof window !== 'undefined' && window.electronAPI?.showSaveDialog) {
         const dialogRes = await window.electronAPI.showSaveDialog(`${baseName}.${ext}`);

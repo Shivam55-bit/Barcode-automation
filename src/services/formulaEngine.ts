@@ -1,13 +1,11 @@
-/**
- * Industrial Enterprise Formula & Expression Engine
- * Supports Mathematical, String, Date Arithmetic, and Conditional Logic
- */
 import { formatCustomDate } from './dataSourceEngine';
+import { parseVBDate, vbDateAdd } from './vbscriptEngine';
 
 export interface FormulaContext {
   record?: Record<string, any>;
   variables?: Record<string, any>;
   namedSources?: Record<string, any>;
+  globalData?: Record<string, any>;
   system?: Record<string, any>;
 }
 
@@ -18,13 +16,13 @@ export interface FormulaEvaluationResult {
 }
 
 /**
- * Standardizes dates from string, number, or Date object
+ * Standardizes dates from string, number, or Date object using strict VBScript date normalizer
  */
 function parseDateInput(input: any): Date {
-  if (input instanceof Date) return input;
-  if (!input) return new Date();
-  const parsed = new Date(input);
-  return isNaN(parsed.getTime()) ? new Date() : parsed;
+  if (input instanceof Date) return isNaN(input.getTime()) ? new Date() : input;
+  if (input === undefined || input === null || input === '') return new Date();
+  const parsed = parseVBDate(input);
+  return parsed && !isNaN(parsed.getTime()) ? parsed : new Date();
 }
 
 /**
@@ -65,19 +63,13 @@ function createSandboxEnvironment(ctx: FormulaContext): Record<string, any> {
     NOW: () => new Date(),
     TODAY: () => new Date(),
     ADDDAYS: (dateInput: any, days: number) => {
-      const d = new Date(parseDateInput(dateInput));
-      d.setDate(d.getDate() + Number(days));
-      return d;
+      return vbDateAdd('d', days, dateInput);
     },
     ADDMONTHS: (dateInput: any, months: number) => {
-      const d = new Date(parseDateInput(dateInput));
-      d.setMonth(d.getMonth() + Number(months));
-      return d;
+      return vbDateAdd('m', months, dateInput);
     },
     ADDYEARS: (dateInput: any, years: number) => {
-      const d = new Date(parseDateInput(dateInput));
-      d.setFullYear(d.getFullYear() + Number(years));
-      return d;
+      return vbDateAdd('yyyy', years, dateInput);
     },
     DATEDIFF: (d1: any, d2: any, unit: 'days' | 'months' | 'years' = 'days') => {
       const date1 = parseDateInput(d1).getTime();
@@ -115,10 +107,32 @@ function createSandboxEnvironment(ctx: FormulaContext): Record<string, any> {
     TotalPages: sys.totalPages || 1,
   };
 
+  // Record accessor function: Record("Field")
+  mergedScope.Record = (fn: string) => {
+    if (!ctx.record || !fn) return '';
+    if (ctx.record[fn] !== undefined) return ctx.record[fn];
+    const match = Object.keys(ctx.record || {}).find((k) => k.toLowerCase() === fn.toLowerCase());
+    return match !== undefined ? ctx.record[match] : '';
+  };
+  mergedScope.record = mergedScope.Record;
+
   // Populate Record columns
   if (ctx.record) {
     for (const [k, v] of Object.entries(ctx.record)) {
       mergedScope[k] = v;
+      // Also normalize alphanumeric field keys
+      const safeKey = k.replace(/[^a-zA-Z0-9_]/g, '_');
+      if (safeKey !== k) {
+        mergedScope[safeKey] = v;
+      }
+    }
+  }
+
+  // Populate Global Data
+  if (ctx.globalData) {
+    mergedScope.Global = { ...ctx.globalData };
+    for (const [k, v] of Object.entries(ctx.globalData)) {
+      if (!mergedScope[k]) mergedScope[k] = v;
     }
   }
 
@@ -140,15 +154,30 @@ function createSandboxEnvironment(ctx: FormulaContext): Record<string, any> {
 }
 
 /**
- * Pre-processes user expression: replaces [FieldName] with identifier
+ * Pre-processes user expression: replaces {{FieldName}}, {FieldName}, and [FieldName] with identifier
  */
 function normalizeExpression(expr: string): string {
   let clean = expr.trim();
   if (clean.startsWith('=')) {
     clean = clean.substring(1).trim();
   }
+  // Replace {{Field Name}} or {Field Name}
+  clean = clean.replace(/\{{1,2}([a-zA-Z0-9_.\s]+)\}{1,2}/g, (_, fieldName) => {
+    const trimmed = fieldName.trim();
+    // If it contains spaces or dots, access via Record("...")
+    if (trimmed.includes(' ')) {
+      return `Record("${trimmed}")`;
+    }
+    return trimmed;
+  });
   // Replace [Field Name] with FieldName if enclosed in brackets
-  clean = clean.replace(/\[([a-zA-Z0-9_.]+)\]/g, '$1');
+  clean = clean.replace(/\[([a-zA-Z0-9_.\s]+)\]/g, (_, fieldName) => {
+    const trimmed = fieldName.trim();
+    if (trimmed.includes(' ')) {
+      return `Record("${trimmed}")`;
+    }
+    return trimmed;
+  });
   return clean;
 }
 

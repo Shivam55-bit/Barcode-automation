@@ -1,8 +1,18 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { LabelTemplate, LabelElement, TextElement, CanvasAnnotation, ViewportState } from '../../types';
 import { CanvasElement } from './CanvasElement';
-import { renderBarcodeToCanvas } from '../../services/barcodeEngine';
-import { measureTextObject } from '../../services/textMeasurementEngine';
+import { renderBarcodeToCanvas, calculateBarcodeLayout, resolveBarcodeData } from '../../services/barcodeEngine';
+import { evaluateElementData, resolveImageElementSrc, evaluateTextElementRuns, hasDataSourceFontOverrides } from '../../services/dataSourceEngine';
+import { getTextElementMarkup } from '../../services/textMarkupEngine';
+import {
+  fitTextToBox,
+  isMultiLineTextElement,
+  isSingleLineTextElement,
+  isTextFitToBoxEnabled,
+  measureTextObject,
+  scaleTextRunsForFit,
+} from '../../services/textMeasurementEngine';
+import { getMultiLineLayoutValue, getSingleLineLayoutValue } from '../../services/controlCharacterService';
 import { Lock, MessageSquare, AlertCircle, Sparkles, CheckCircle2, Shield } from 'lucide-react';
 
 export interface UnifiedLabelCanvasProps {
@@ -258,31 +268,30 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
   const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Evaluate content with dynamic records
-  let evaluatedContent = (element as any).text || (element as any).value || '';
-  if ((element as any).dataBinding) {
-    const key = (element as any).dataBinding.replace(/[{}]/g, '').trim();
-    if (recordData[key] !== undefined) {
-      evaluatedContent = recordData[key];
-    }
-  }
+  const evaluatedContent = evaluateElementData(element, { record: recordData });
 
   const isTextEl = element.type === 'text';
   const textEl = isTextEl ? (element as TextElement) : null;
-  const isTextAutoSize =
-    isTextEl &&
-    textEl &&
-    textEl.autoSize !== false &&
-    (textEl.autoSize === true ||
-      textEl.autoSizeConfig?.enabled === true ||
-      textEl.textType === 'single-line' ||
-      !textEl.textType ||
-      textEl.textFormatType === 'single-line');
+  const isParagraphLayout = !!textEl && (textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph');
+  const isTextFitToBox = !!textEl && isTextFitToBoxEnabled(textEl);
+  const paragraphAutoHeight = isParagraphLayout && !!textEl && !isTextFitToBox
+    && (textEl.autoHeight ?? textEl.autoSize === true);
+  const isTextAutoWidth = !!textEl && isSingleLineTextElement(textEl) && !isTextFitToBox
+    && (textEl.sizingMode === 'auto-width' || (!textEl.sizingMode && textEl.autoSize !== false));
+  const textFitRuns = isTextFitToBox && textEl
+    ? evaluateTextElementRuns(textEl, { record: recordData })
+    : undefined;
+  const textFit = isTextFitToBox && textEl
+    ? fitTextToBox(textEl, String(evaluatedContent ?? ''), textFitRuns)
+    : null;
+  const fittedRuns = textFit && textEl
+    ? scaleTextRunsForFit(textEl, textFitRuns, textFit.fontSize, textFit.fontWidthScale)
+    : undefined;
 
   let dynamicWidth = element.width;
   let dynamicHeight = element.height;
 
-  if (isTextAutoSize && textEl) {
-    const isParagraph = textEl.textFormatType === 'paragraph' || textEl.textType === 'paragraph';
+  if (isTextAutoWidth && textEl) {
     const dims = measureTextObject({
       text: typeof evaluatedContent === 'string' ? evaluatedContent : textEl.text,
       fontFamily: textEl.fontFamily,
@@ -296,11 +305,35 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
       textFormatType: textEl.textFormatType,
       multiline: textEl.multiline,
       wrap: textEl.wrap || textEl.wordWrap,
-      containerWidthMm: isParagraph && textEl.width > 0 ? textEl.width : undefined,
       borderConfig: textEl.borderConfig,
     });
-    dynamicWidth = isParagraph && textEl.width > 0 ? textEl.width : dims.width;
+    dynamicWidth = dims.width;
     dynamicHeight = dims.height;
+  }
+  if (paragraphAutoHeight && textEl) {
+    const runs = evaluateTextElementRuns(textEl, { record: recordData });
+    dynamicHeight = measureTextObject({
+      text: typeof evaluatedContent === 'string' ? evaluatedContent : textEl.text,
+      runs,
+      fontFamily: textEl.fontFamily,
+      fontSize: textEl.fontSize,
+      fontWeight: textEl.fontWeight,
+      fontStyle: textEl.fontStyle,
+      letterSpacing: textEl.letterSpacing,
+      lineHeight: textEl.lineHeight,
+      fontWidthScale: textEl.fontWidthScale,
+      textType: 'paragraph',
+      textFormatType: 'paragraph',
+      multiline: true,
+      wrap: textEl.wrap !== false && textEl.wordWrap !== false,
+      containerWidthMm: textEl.width,
+      borderConfig: textEl.borderConfig,
+    }).height;
+  }
+
+  if (element.type === 'barcode') {
+    const layout = calculateBarcodeLayout(element as any);
+    dynamicHeight = layout.totalHeightMm;
   }
 
   const leftPx = element.x * scale;
@@ -313,8 +346,8 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
       renderBarcodeToCanvas(
         barcodeCanvasRef.current,
         element as any,
-        3,
-        { record: recordData }
+        scale,
+        { record: recordData, symbolOnly: true }
       ).catch(() => {});
     }
   }, [element, recordData, scale]);
@@ -363,32 +396,39 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
       {/* 1. Text Element */}
       {element.type === 'text' && (() => {
         const textElement = element as TextElement;
-        const baseFontSizePx = (textElement.fontSize || 10) * (25.4 / 72) * scale;
-        let effectiveFontSize = baseFontSizePx;
+        const effectiveFontSize = (textFit?.fontSize ?? textElement.fontSize ?? 10) * (25.4 / 72) * scale;
+        const renderAsParagraph = isParagraphLayout || (isMultiLineTextElement(textElement) && isTextFitToBox);
 
-        if (textElement.autoFit && !isTextAutoSize && evaluatedContent) {
-          const maxW = widthPx;
-          const maxH = heightPx;
-          const textLength = evaluatedContent.length || 1;
-          const approxCharWidthRatio = 0.55;
-          if (!textElement.multiline && textElement.textType !== 'multi-line') {
-            const estimatedWidth = textLength * effectiveFontSize * approxCharWidthRatio;
-            if (estimatedWidth > maxW && maxW > 0) {
-              const widthRatio = maxW / estimatedWidth;
-              effectiveFontSize = Math.max(6, effectiveFontSize * widthRatio);
-            }
-            if (effectiveFontSize * 1.2 > maxH && maxH > 0) {
-              effectiveFontSize = Math.max(6, maxH * 0.75);
-            }
-          } else {
-            const charsPerLine = Math.max(1, Math.floor(maxW / (effectiveFontSize * approxCharWidthRatio)));
-            const estimatedLines = Math.ceil(textLength / charsPerLine);
-            const estimatedHeight = estimatedLines * effectiveFontSize * (textElement.lineHeight || 1.15);
-            if (estimatedHeight > maxH && maxH > 0) {
-              const heightRatio = Math.sqrt(maxH / estimatedHeight);
-              effectiveFontSize = Math.max(6, effectiveFontSize * heightRatio);
-            }
-          }
+        if (renderAsParagraph) {
+          const runs = fittedRuns ?? evaluateTextElementRuns(textElement, { record: recordData });
+          const paragraphElement: TextElement = {
+            ...textElement,
+            ...(isTextFitToBox ? {
+              textFormatType: 'paragraph',
+              fontSize: textFit!.fontSize,
+              fontWidthScale: textFit!.fontWidthScale,
+            } : {}),
+            height: dynamicHeight,
+            autoHeight: paragraphAutoHeight,
+          };
+          const markup = getTextElementMarkup(
+            paragraphElement,
+            String(evaluatedContent ?? ''),
+            runs,
+          ) || '';
+          return (
+            <div
+              className="w-full h-full overflow-visible"
+              style={{
+                fontFamily: textElement.fontFamily || 'Arial, sans-serif',
+                fontSize: `${effectiveFontSize}px`,
+                color: textElement.whiteOnBlack ? '#ffffff' : textElement.color || '#000000',
+                backgroundColor: textElement.whiteOnBlack ? '#000000' : textElement.backgroundColor || 'transparent',
+                lineHeight: textElement.lineHeight || 1.15,
+              }}
+              dangerouslySetInnerHTML={{ __html: markup }}
+            />
+          );
         }
 
         if (textElement.textType === 'html' || textElement.textType === 'word-processor' || textElement.textType === 'rtf' || textElement.richContentHtml) {
@@ -407,6 +447,12 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
           );
         }
 
+        const textDecor = [
+          textEl.underline || textEl.textDecoration === 'underline' ? 'underline' : '',
+          textEl.strikeout || textEl.textDecoration === 'line-through' ? 'line-through' : '',
+        ].filter(Boolean).join(' ') || 'none';
+        const fontWidthScale = (textFit?.fontWidthScale ?? textEl.fontWidthScale ?? 100) / 100;
+
         return (
           <div
             className="w-full h-full overflow-hidden flex"
@@ -415,9 +461,9 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
               fontSize: `${effectiveFontSize}px`,
               fontWeight: textEl.fontWeight || 'normal',
               fontStyle: textEl.fontStyle || 'normal',
-              textDecoration: textEl.textDecoration || 'none',
-              color: textEl.color || '#000000',
-              backgroundColor: textEl.backgroundColor || 'transparent',
+              textDecoration: textDecor,
+              color: textEl.whiteOnBlack ? '#ffffff' : textEl.color || '#000000',
+              backgroundColor: textEl.whiteOnBlack ? '#000000' : textEl.backgroundColor || 'transparent',
               letterSpacing: `${textEl.letterSpacing || 0}px`,
               lineHeight: textEl.lineHeight || 1.15,
               justifyContent:
@@ -432,10 +478,71 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
                   : textEl.verticalAlign === 'bottom'
                   ? 'flex-end'
                   : 'flex-start',
-              whiteSpace: textEl.multiline ? 'pre-wrap' : 'nowrap',
+              whiteSpace: isMultiLineTextElement(textEl) ? 'pre-wrap' : 'nowrap',
+              textAlign: (textEl.textAlign as any) || 'left',
             }}
           >
-            {evaluatedContent}
+            <div
+              style={{
+                width: '100%',
+                transform: fontWidthScale !== 1 ? `scaleX(${fontWidthScale})` : undefined,
+                transformOrigin: textEl.textAlign === 'center' ? 'center' : textEl.textAlign === 'right' ? 'right' : 'left',
+              }}
+            >
+              {hasDataSourceFontOverrides(textEl) ? (
+                (fittedRuns ?? evaluateTextElementRuns(textEl, { record: recordData })).map((run, idx) => {
+                const isSingle = !isMultiLineTextElement(textEl);
+                const runText = isSingle
+                  ? getSingleLineLayoutValue(run.value)
+                  : getMultiLineLayoutValue(run.value);
+                if (!runText) return null;
+                const s = run.style;
+                const runUnderline = s.underline;
+                const runStrikeout = s.strikeout;
+                const runDecor =
+                  runUnderline && runStrikeout
+                    ? 'underline line-through'
+                    : runUnderline
+                    ? 'underline'
+                    : runStrikeout
+                    ? 'line-through'
+                    : 'none';
+                const runFontSizePx = (s.fontSize || textEl.fontSize || 10) * (25.4 / 72) * scale;
+                const runFontScale = (s.fontWidthScale || 100) / 100;
+                const runColor = s.whiteOnBlack ? '#ffffff' : (s.color || textEl.color || '#000000');
+                const runBg = s.whiteOnBlack
+                  ? '#000000'
+                  : s.backgroundColor && s.backgroundColor !== 'transparent'
+                  ? s.backgroundColor
+                  : undefined;
+
+                return (
+                  <span
+                    key={run.sourceId || idx}
+                    style={{
+                      fontFamily: s.fontFamily || textEl.fontFamily || 'Arial, sans-serif',
+                      fontSize: `${runFontSizePx}px`,
+                      fontWeight: s.fontWeight || 'normal',
+                      fontStyle: s.fontStyle || 'normal',
+                      textDecoration: runDecor,
+                      color: runColor,
+                      backgroundColor: runBg,
+                      letterSpacing: s.letterSpacing !== undefined ? `${s.letterSpacing}px` : undefined,
+                      transform: runFontScale !== 1 ? `scaleX(${runFontScale})` : undefined,
+                      display: runFontScale !== 1 ? 'inline-block' : undefined,
+                      transformOrigin: 'left center',
+                    }}
+                  >
+                    {runText}
+                  </span>
+                );
+                })
+              ) : isMultiLineTextElement(textEl) ? (
+                getMultiLineLayoutValue(String(evaluatedContent ?? ''))
+              ) : (
+                getSingleLineLayoutValue(String(evaluatedContent ?? ''))
+              )}
+            </div>
           </div>
         );
       })()}
@@ -445,22 +552,90 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
         const barcodeEl = element as any;
         const isEllipse = barcodeEl.borderType === 'ellipse';
         const hasBorder = barcodeEl.borderType && barcodeEl.borderType !== 'none';
+        const layout = calculateBarcodeLayout(barcodeEl);
+        const resolved = resolveBarcodeData(barcodeEl, { record: recordData });
+        const isTop = resolved.placement === 'top';
+        const symbolHeightPx = Math.max(6, Math.round(layout.symbolHeightMm * scale));
+        const hrtGapPx = Math.max(1, Math.round(layout.hrtGapMm * scale));
+        const fontSizePx = Math.max(7, Math.round(layout.fontSizePt * (25.4 / 72) * scale));
+
+        const fontName = (barcodeEl.humanReadableFont || barcodeEl.humanReadable?.fontFamily || barcodeEl.fontFamily || 'Arial').trim();
+        const styleRaw =
+          barcodeEl.humanReadableFontStyle ||
+          (barcodeEl.fontStyle === 'italic' && barcodeEl.fontWeight === 'bold'
+            ? 'bold-italic'
+            : barcodeEl.fontStyle === 'italic'
+              ? 'italic'
+              : barcodeEl.fontWeight === 'bold'
+                ? 'bold'
+                : 'regular');
+        const isBold = styleRaw === 'bold' || styleRaw === 'bold-italic' || barcodeEl.fontWeight === 'bold';
+        const isItalic = styleRaw === 'italic' || styleRaw === 'bold-italic' || barcodeEl.fontStyle === 'italic';
+        const isUnderline = Boolean(barcodeEl.humanReadableUnderline || barcodeEl.underline);
+        const textColor = barcodeEl.humanReadableColor || barcodeEl.color || '#000000';
+        const textAlign = resolved.alignment === 'left' ? 'left' : resolved.alignment === 'right' ? 'right' : 'center';
+
+        const hrtRegion = resolved.includeText && resolved.displayTextLines.length > 0 ? (
+          <div
+            className="barcode-hrt-region select-none shrink-0"
+            style={{
+              width: '100%',
+              marginTop: isTop ? 0 : `${hrtGapPx}px`,
+              marginBottom: isTop ? `${hrtGapPx}px` : 0,
+              fontFamily: `"${fontName}", Arial, sans-serif`,
+              fontSize: `${fontSizePx}px`,
+              fontWeight: isBold ? 'bold' : 'normal',
+              fontStyle: isItalic ? 'italic' : 'normal',
+              textDecoration: isUnderline ? 'underline' : 'none',
+              color: textColor,
+              textAlign,
+              lineHeight: 1.25,
+              whiteSpace: 'nowrap',
+              overflow: 'visible',
+            }}
+          >
+            {resolved.displayTextLines.map((line: string, idx: number) => (
+              <div key={idx}>{line}</div>
+            ))}
+          </div>
+        ) : null;
+
         return (
           <div
-            className={`w-full h-full flex flex-col items-center justify-center overflow-hidden ${
+            className={`w-full h-full flex flex-col justify-start overflow-visible ${
               isEllipse ? 'rounded-full' : ''
             }`}
             style={{
               backgroundColor:
                 barcodeEl.borderFillColor && barcodeEl.borderFillColor !== 'None'
                   ? barcodeEl.borderFillColor
-                  : 'rgba(255, 255, 255, 0.7)',
+                  : 'transparent',
               borderWidth: hasBorder ? `${Math.max(1, (barcodeEl.borderThickness || 1) * scale * 0.75)}px` : '0px',
               borderColor: barcodeEl.borderColor || '#000000',
               borderStyle: barcodeEl.borderDashStyle || 'solid',
             }}
           >
-            <canvas ref={barcodeCanvasRef} className="max-w-full max-h-full object-contain p-0.5" />
+            {isTop && hrtRegion}
+
+            {/* SYMBOL REGION */}
+            <div
+              className="barcode-symbol-region flex items-center justify-center shrink-0"
+              style={{
+                width: '100%',
+                height: `${symbolHeightPx}px`,
+              }}
+            >
+              <canvas
+                ref={barcodeCanvasRef}
+                style={{
+                  width: '100%',
+                  height: `${symbolHeightPx}px`,
+                  display: 'block',
+                }}
+              />
+            </div>
+
+            {!isTop && hrtRegion}
           </div>
         );
       })()}
@@ -504,6 +679,21 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
                 }}
               />
             )}
+            {(shape.shapeType === 'polygon' || shape.svgPath) && (
+              <svg
+                className="w-full h-full overflow-visible"
+                viewBox={shape.viewBox || '0 0 100 100'}
+                preserveAspectRatio="none"
+              >
+                <path
+                  d={shape.svgPath}
+                  fill={shape.fillColor || 'transparent'}
+                  stroke={shape.strokeColor || '#000000'}
+                  strokeWidth={Math.max(1, (shape.strokeWidth || 0.5) * 2)}
+                  strokeDasharray={shape.strokeStyle === 'dashed' ? '6 4' : shape.strokeStyle === 'dotted' ? '2 2' : undefined}
+                />
+              </svg>
+            )}
           </div>
         );
       })()}
@@ -512,9 +702,13 @@ const ReadOnlyCanvasElement: React.FC<ReadOnlyCanvasElementProps> = ({
       {element.type === 'image' && (
         <div className="w-full h-full overflow-hidden">
           <img
-            src={(element as any).src}
+            src={resolveImageElementSrc(element, { record: recordData }) || (element as any).src}
             alt={element.name}
             className="w-full h-full pointer-events-none"
+            onError={(e) => {
+              const fb = (element as any).fallbackSrc;
+              if (fb && e.currentTarget.src !== fb) e.currentTarget.src = fb;
+            }}
             style={{
               objectFit: (element as any).objectFit || 'contain',
               filter: `${(element as any).grayscale ? 'grayscale(100%)' : ''} ${(element as any).invert ? 'invert(100%)' : ''}`,

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { TextElement } from '../../types';
-import { measureTextObject } from '../../services/textMeasurementEngine';
+import { isMultiLineTextElement, isSingleLineTextElement, measureTextObject, normalizeTextForObjectType } from '../../services/textMeasurementEngine';
 
 interface InlineTextEditorProps {
   element: TextElement;
@@ -19,20 +19,19 @@ export const InlineTextEditor: React.FC<InlineTextEditorProps> = ({
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draftText, setDraftText] = useState<string>(element.text || '');
+  const draftTextRef = useRef<string>(element.text || '');
+  const onDraftDimensionsChangeRef = useRef(onDraftDimensionsChange);
+  onDraftDimensionsChangeRef.current = onDraftDimensionsChange;
   const initialTextRef = useRef<string>(element.text || '');
   const isCommittedRef = useRef<boolean>(false);
 
-  const isSingleLine =
-    element.textType === 'single-line' ||
-    !element.textType ||
-    element.textFormatType === 'single-line' ||
-    (!element.multiline && element.textFormatType !== 'paragraph' && element.textType !== 'paragraph');
+  const isMultiLine = isMultiLineTextElement(element);
+  const isSingleLine = isSingleLineTextElement(element);
+  const isParagraphLayout = element.textFormatType === 'paragraph' || element.textType === 'paragraph';
+  const autoHeightEnabled = isParagraphLayout && (element.autoHeight ?? element.autoSize === true);
 
-  const isTextAutoSize =
-    element.autoSize !== false &&
-    (element.autoSize === true ||
-      element.autoSizeConfig?.enabled === true ||
-      isSingleLine);
+  const sizingMode = element.sizingMode || (isMultiLine ? 'fixed-width' : (element.autoSize !== false ? 'auto-width' : 'fixed-width'));
+  const isSingleLineAutoWidth = isSingleLine && sizingMode === 'auto-width';
 
   // Border & padding configuration in screen pixels
   const border = element.borderConfig;
@@ -61,47 +60,74 @@ export const InlineTextEditor: React.FC<InlineTextEditorProps> = ({
     }
   }, []);
 
-  // Real-time dynamic auto-size measurement during live typing
-  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newText = e.target.value;
-    setDraftText(newText);
-
-    if (isTextAutoSize && onDraftDimensionsChange) {
-      const isParagraph = element.textFormatType === 'paragraph' || element.textType === 'paragraph';
+  const measureDraftDimensions = (value: string) => {
+    if ((isSingleLineAutoWidth || autoHeightEnabled) && onDraftDimensionsChange) {
       const measured = measureTextObject({
-        text: newText,
+        text: value,
         fontFamily: element.fontFamily,
         fontSize: element.fontSize,
         fontWeight: element.fontWeight,
         fontStyle: element.fontStyle,
         letterSpacing: element.letterSpacing,
         lineHeight: element.lineHeight,
-        fontWidthScale: element.fontWidthScale,
-        textType: element.textType,
-        textFormatType: element.textFormatType,
-        multiline: element.multiline,
-        wrap: element.wrap || element.wordWrap,
-        containerWidthMm: isParagraph && element.width > 0 ? element.width : undefined,
+        fontWidthScale: element.fontWidthScale || 100,
+        textType: autoHeightEnabled ? 'paragraph' : 'single-line',
+        textFormatType: autoHeightEnabled ? 'paragraph' : 'single-line',
+        multiline: autoHeightEnabled,
+        wrap: autoHeightEnabled ? element.wrap !== false && element.wordWrap !== false : false,
+        containerWidthMm: autoHeightEnabled ? element.width : undefined,
         borderConfig: element.borderConfig,
+        ignoreMinSize: true,
       });
 
-      const nextWidth = isParagraph && element.width > 0 ? element.width : measured.width;
-      const nextHeight = measured.height;
-      onDraftDimensionsChange(element.id, nextWidth, nextHeight);
+      onDraftDimensionsChangeRef.current?.(
+        element.id,
+        autoHeightEnabled ? element.width : measured.width,
+        measured.height,
+      );
     }
+  };
+
+  const updateDraftText = (value: string) => {
+    const newText = isSingleLine
+      ? normalizeTextForObjectType(value, element.textType || 'single-line')
+      : value;
+    draftTextRef.current = newText;
+    setDraftText(newText);
+    measureDraftDimensions(newText);
+  };
+
+  useEffect(() => {
+    if ((!isSingleLineAutoWidth && !autoHeightEnabled) || !document.fonts?.load) return;
+    let current = true;
+    const fontSizePx = (element.fontSize || 10) * (96 / 72);
+    const font = `${element.fontStyle || 'normal'} ${element.fontWeight || 'normal'} ${fontSizePx}px ${element.fontFamily || 'Arial, sans-serif'}`;
+    void document.fonts.load(font, draftText || 'M').then(() => {
+      if (current) measureDraftDimensions(draftTextRef.current);
+    }).catch(error => console.warn('[TextLayout] Could not load the editing font before measuring.', error));
+    return () => { current = false; };
+  }, [draftText, element.fontFamily, element.fontSize, element.fontWeight, element.fontStyle, element.fontWidthScale,
+    element.letterSpacing, element.lineHeight, element.borderConfig, element.width, element.wrap, element.wordWrap,
+    isSingleLineAutoWidth, autoHeightEnabled]);
+
+  // Real-time dynamic auto-size measurement during typing and paste
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    updateDraftText(e.target.value);
   };
 
   const handleCommit = useCallback(() => {
     if (isCommittedRef.current) return;
     isCommittedRef.current = true;
-    onCommit(element.id, draftText);
-  }, [draftText, element.id, onCommit]);
+    const finalVal = normalizeTextForObjectType(draftText, element.textType || (isSingleLine ? 'single-line' : 'multi-line'));
+    onCommit(element.id, finalVal);
+  }, [draftText, element.id, isSingleLine, onCommit, element.textType]);
 
   const handleCancel = useCallback(() => {
     if (isCommittedRef.current) return;
     isCommittedRef.current = true;
+    if (autoHeightEnabled) measureDraftDimensions(element.text || '');
     onCancel();
-  }, [onCancel]);
+  }, [autoHeightEnabled, element.text, onCancel]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     e.stopPropagation(); // Stop propagation to canvas / global hotkeys
@@ -118,13 +144,11 @@ export const InlineTextEditor: React.FC<InlineTextEditorProps> = ({
         handleCommit();
         return;
       }
-      // For multi-line / paragraph text: Ctrl+Enter or Cmd+Enter commits
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         handleCommit();
         return;
       }
-      // Regular Enter inserts newline in multi-line text
     }
 
     if (e.key === 'Tab') {
@@ -159,6 +183,24 @@ export const InlineTextEditor: React.FC<InlineTextEditorProps> = ({
         onChange={handleTextChange}
         onKeyDown={handleKeyDown}
         onBlur={handleCommit}
+        onPaste={(e) => {
+          if (isSingleLine) {
+            e.preventDefault();
+            const dataTransfer = e.clipboardData;
+            const pasted = dataTransfer && typeof dataTransfer.getData === 'function' ? dataTransfer.getData('text') : '';
+            const normalized = normalizeTextForObjectType(pasted, element.textType || 'single-line');
+            const textarea = e.currentTarget;
+            const start = textarea.selectionStart ?? 0;
+            const end = textarea.selectionEnd ?? textarea.value.length;
+            const nextValue = textarea.value.slice(0, start) + normalized + textarea.value.slice(end);
+            updateDraftText(nextValue);
+            requestAnimationFrame(() => {
+              const cursorPos = start + normalized.length;
+              textarea.focus();
+              textarea.setSelectionRange(cursorPos, cursorPos);
+            });
+          }
+        }}
         spellCheck={false}
         rows={isSingleLine ? 1 : undefined}
         className="w-full h-full bg-transparent resize-none border-none outline-none overflow-hidden m-0 p-0 select-text"
@@ -171,10 +213,12 @@ export const InlineTextEditor: React.FC<InlineTextEditorProps> = ({
           color: element.whiteOnBlack ? '#ffffff' : element.color || '#000000',
           letterSpacing: `${element.letterSpacing || 0}px`,
           lineHeight: element.lineHeight || 1.15,
-          textAlign: element.textAlign || 'left',
+          textAlign: element.textAlign === 'distributed' ? 'justify' : element.textAlign || 'left',
           transform: fontScale !== 1 ? `scaleX(${fontScale})` : undefined,
           transformOrigin: element.textAlign === 'center' ? 'center' : element.textAlign === 'right' ? 'right' : 'left',
-          whiteSpace: isSingleLine ? 'nowrap' : 'pre-wrap',
+          whiteSpace: isSingleLine ? 'nowrap' : element.wrap !== false ? 'pre-wrap' : 'pre',
+          overflowWrap: isSingleLine ? 'normal' : 'break-word',
+          wordWrap: isSingleLine ? 'normal' : 'break-word',
           cursor: 'text',
           caretColor: element.whiteOnBlack ? '#ffffff' : '#000000',
         }}

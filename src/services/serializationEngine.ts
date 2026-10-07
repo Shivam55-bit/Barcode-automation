@@ -310,33 +310,35 @@ export function evaluateSerializedValue(
   }
 
   const effectiveStep = (action === 'decrement' ? -1 : 1) * incrementBy * stepMultiplier;
-  if (effectiveStep === 0) {
-    return initialValue;
+  let result = initialValue;
+
+  if (effectiveStep !== 0) {
+    if (method === 'numeric') {
+      result = stepNumeric(initialValue, effectiveStep, preserveLength);
+    } else if (method === 'hexadecimal') {
+      const isLower = config.letterCase === 'lowercase_hex' || config.letterCase === 'lowercase';
+      result = stepHexadecimal(initialValue, effectiveStep, isLower, preserveLength);
+    } else if (method === 'alphabetic') {
+      let alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      if (config.letterCase === 'uppercase_no_io') {
+        alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+      } else if (config.letterCase === 'lowercase_no_l') {
+        alpha = 'abcdefghijkmnopqrstuvwxyz';
+      } else if (config.letterCase === 'lowercase' || initialValue === initialValue.toLowerCase()) {
+        alpha = 'abcdefghijklmnopqrstuvwxyz';
+      }
+      result = stepAlphabeticWithAlphabet(initialValue, alpha, effectiveStep);
+    } else if (method === 'custom') {
+      const alphabet = config.customSequence || '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      result = stepCustomSequence(initialValue, alphabet, effectiveStep, preserveLength);
+    } else {
+      // Both 'alphabetic_and_numeric' (BarTender default) and 'alphanumeric'
+      result = stepAlphanumeric(initialValue, effectiveStep, preserveLength);
+    }
   }
 
-  let result = initialValue;
-  if (method === 'numeric') {
-    result = stepNumeric(initialValue, effectiveStep, preserveLength);
-  } else if (method === 'hexadecimal') {
-    const isLower = config.letterCase === 'lowercase_hex' || config.letterCase === 'lowercase';
-    result = stepHexadecimal(initialValue, effectiveStep, isLower, preserveLength);
-  } else if (method === 'alphabetic') {
-    let alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    if (config.letterCase === 'uppercase_no_io') {
-      alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-    } else if (config.letterCase === 'lowercase_no_l') {
-      alpha = 'abcdefghijkmnopqrstuvwxyz';
-    } else if (config.letterCase === 'lowercase' || initialValue === initialValue.toLowerCase()) {
-      alpha = 'abcdefghijklmnopqrstuvwxyz';
-    }
-    result = stepAlphabeticWithAlphabet(initialValue, alpha, effectiveStep);
-  } else if (method === 'custom') {
-    const alphabet = config.customSequence || '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    result = stepCustomSequence(initialValue, alphabet, effectiveStep, preserveLength);
-  } else {
-    // Both 'alphabetic_and_numeric' (BarTender default) and 'alphanumeric'
-    result = stepAlphanumeric(initialValue, effectiveStep, preserveLength);
-  }
+  if (config.prefix) result = `${config.prefix}${result}`;
+  if (config.suffix) result = `${result}${config.suffix}`;
 
   return result;
 }

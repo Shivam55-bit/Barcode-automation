@@ -5,16 +5,21 @@
     "output": "dist-electron-build"
   },
   "compression": "maximum",
+  "extraResources": [
+    { "from": "scripts/bartender_snapshot.ps1", "to": "interop/bartender_snapshot.ps1" },
+    { "from": "assets/barcodeflow.ico", "to": "barcodeflow.ico" }
+  ],
   "files": [
     "dist/**/*",
     "dist-electron/**/*",
-    "barcode-automation-backend/data/**/*",
+    "!barcode-automation-backend/data/**/*",
+    "!dist/download/**/*",
+    "!dist/downloads/**/*",
     "!barcode-automation-backend/downloads/**/*",
     "!barcode-automation-backend/src/**/*",
     "!**/node_modules/*/{CHANGELOG.md,README.md,README,test,tests,example,examples}",
     "!**/node_modules/lucide-react/**",
     "!**/node_modules/jspdf/**",
-    "!**/node_modules/@google/**",
     "!**/node_modules/motion/**",
     "!**/node_modules/react/**",
     "!**/node_modules/react-dom/**",
@@ -28,7 +33,16 @@
     "!dist-electron-build/**/*"
   ],
   "win": {
+    "icon": "assets/barcodeflow.ico",
     "signAndEditExecutable": false,
+    "fileAssociations": [
+      {
+        "ext": "bfl",
+        "name": "BarcodeFlow Document",
+        "description": "BarcodeFlow label document",
+        "role": "Editor"
+      }
+    ],
     "target": [
       {
         "target": "nsis",
@@ -38,6 +52,12 @@
     "artifactName": "BarcodeFlow_Setup.exe"
   },
   "nsis": {
+    "installerIcon": "assets/barcodeflow.ico",
+    "uninstallerIcon": "assets/barcodeflow.ico",
+    "installerHeaderIcon": "assets/barcodeflow.ico",
+    "perMachine": false,
+    "allowElevation": false,
+    "deleteAppDataOnUninstall": false,
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
     "createDesktopShortcut": true,

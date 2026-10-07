@@ -41,6 +41,86 @@ serialsRouter.get('/', (req: Request, res: Response) => {
   }
 });
 
+// GET /api/serials/orphans - Scan for unresolved reservations
+serialsRouter.get('/orphans', (req: Request, res: Response) => {
+  try {
+    const rows = dbService.query<any>(
+      `SELECT * FROM serialization_reservations 
+       WHERE status IN ('RESERVED', 'SUBMITTED', 'UNKNOWN', 'PRINTED_OR_SUBMITTED_BUT_COMMIT_FAILED')
+       ORDER BY created_at DESC`
+    );
+    res.json(rows || []);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch orphan reservations', details: err?.message });
+  }
+});
+
+// GET /api/serials/journal - Audit trail
+serialsRouter.get('/journal', (req: Request, res: Response) => {
+  try {
+    const sourceId = req.query.sourceId as string;
+    let sql = 'SELECT * FROM serialization_journal ';
+    const params: any[] = [];
+    if (sourceId) {
+      sql += 'WHERE source_id = ? ';
+      params.push(sourceId);
+    }
+    sql += 'ORDER BY timestamp DESC LIMIT 200';
+    const rows = dbService.query<any>(sql, params);
+    res.json(rows || []);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch serialization journal', details: err?.message });
+  }
+});
+
+// POST /api/serials/resolve-orphan - Resolve orphan reservation
+serialsRouter.post('/resolve-orphan', (req: Request, res: Response) => {
+  try {
+    const { reservationId, action, resolutionReason = 'Operator manual resolution' } = req.body;
+    if (!reservationId || !action) {
+      return res.status(400).json({ error: 'Missing reservationId or action' });
+    }
+
+    const resRecord = dbService.queryOne<any>(
+      'SELECT * FROM serialization_reservations WHERE id = ?',
+      [reservationId]
+    );
+
+    if (!resRecord) {
+      return res.status(404).json({ error: 'Reservation not found' });
+    }
+
+    const now = new Date().toISOString();
+
+    if (action === 'rollback') {
+      dbService.execute(
+        `UPDATE serialization_reservations SET status = 'ROLLED_BACK', error = ?, updated_at = ? WHERE id = ?`,
+        [resolutionReason, now, reservationId]
+      );
+    } else if (action === 'mark_printed') {
+      dbService.execute(
+        `UPDATE serialization_reservations SET status = 'COMMITTED', printed_count = count, remaining_count = 0, updated_at = ? WHERE id = ?`,
+        [now, reservationId]
+      );
+      dbService.execute(
+        `UPDATE serialization_sources SET current_committed_value = ?, version = version + 1, last_committed_at = ?, updated_at = ? WHERE id = ?`,
+        [resRecord.end_value, now, now, resRecord.source_id]
+      );
+    }
+
+    const journalId = `jnl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    dbService.execute(
+      `INSERT INTO serialization_journal (id, source_id, old_value, new_value, reservation_id, timestamp, reason, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [journalId, resRecord.source_id, resRecord.start_value, resRecord.end_value, reservationId, now, `Orphan Resolved (${action}): ${resolutionReason}`, action === 'rollback' ? 'rolled_back' : 'committed']
+    );
+
+    res.json({ success: true, reservationId, action, message: `Reservation resolved as ${action}` });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to resolve orphan reservation', details: err?.message });
+  }
+});
+
 // GET /api/serials/:id - Get specific sequence
 serialsRouter.get('/:id', (req: Request, res: Response) => {
   try {
@@ -504,86 +584,6 @@ serialsRouter.post('/partial', (req: Request, res: Response) => {
     res.json({ success: true, reservationId, printedCount, remainingCount, confirmedValue });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to record partial print', details: err?.message });
-  }
-});
-
-// GET /api/serials/orphans - Scan for unresolved reservations
-serialsRouter.get('/orphans', (req: Request, res: Response) => {
-  try {
-    const rows = dbService.query<any>(
-      `SELECT * FROM serialization_reservations 
-       WHERE status IN ('RESERVED', 'SUBMITTED', 'UNKNOWN', 'PRINTED_OR_SUBMITTED_BUT_COMMIT_FAILED')
-       ORDER BY created_at DESC`
-    );
-    res.json(rows);
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to fetch orphan reservations', details: err?.message });
-  }
-});
-
-// POST /api/serials/resolve-orphan - Resolve orphan reservation
-serialsRouter.post('/resolve-orphan', (req: Request, res: Response) => {
-  try {
-    const { reservationId, action, resolutionReason = 'Operator manual resolution' } = req.body;
-    if (!reservationId || !action) {
-      return res.status(400).json({ error: 'Missing reservationId or action' });
-    }
-
-    const resRecord = dbService.queryOne<any>(
-      'SELECT * FROM serialization_reservations WHERE id = ?',
-      [reservationId]
-    );
-
-    if (!resRecord) {
-      return res.status(404).json({ error: 'Reservation not found' });
-    }
-
-    const now = new Date().toISOString();
-
-    if (action === 'rollback') {
-      dbService.execute(
-        `UPDATE serialization_reservations SET status = 'ROLLED_BACK', error = ?, updated_at = ? WHERE id = ?`,
-        [resolutionReason, now, reservationId]
-      );
-    } else if (action === 'mark_printed') {
-      dbService.execute(
-        `UPDATE serialization_reservations SET status = 'COMMITTED', printed_count = count, remaining_count = 0, updated_at = ? WHERE id = ?`,
-        [now, reservationId]
-      );
-      dbService.execute(
-        `UPDATE serialization_sources SET current_committed_value = ?, version = version + 1, last_committed_at = ?, updated_at = ? WHERE id = ?`,
-        [resRecord.end_value, now, now, resRecord.source_id]
-      );
-    }
-
-    const journalId = `jnl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-    dbService.execute(
-      `INSERT INTO serialization_journal (id, source_id, old_value, new_value, reservation_id, timestamp, reason, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [journalId, resRecord.source_id, resRecord.start_value, resRecord.end_value, reservationId, now, `Orphan Resolved (${action}): ${resolutionReason}`, action === 'rollback' ? 'rolled_back' : 'committed']
-    );
-
-    res.json({ success: true, reservationId, action, message: `Reservation resolved as ${action}` });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to resolve orphan reservation', details: err?.message });
-  }
-});
-
-// GET /api/serials/journal - Audit trail
-serialsRouter.get('/journal', (req: Request, res: Response) => {
-  try {
-    const sourceId = req.query.sourceId as string;
-    let sql = 'SELECT * FROM serialization_journal ';
-    const params: any[] = [];
-    if (sourceId) {
-      sql += 'WHERE source_id = ? ';
-      params.push(sourceId);
-    }
-    sql += 'ORDER BY timestamp DESC LIMIT 200';
-    const rows = dbService.query<any>(sql, params);
-    res.json(rows);
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to fetch serialization journal', details: err?.message });
   }
 });
 

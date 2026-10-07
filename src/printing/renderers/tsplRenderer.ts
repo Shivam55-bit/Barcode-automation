@@ -1,8 +1,10 @@
 import { LabelTemplate } from '../../types';
 import { mmToDots } from '../../printer/dpiService';
 import { evaluateElementData } from '../../services/dataSourceEngine';
+import { resolveBarcodeData } from '../../services/barcodeEngine';
 import { isObjectCompletelyOutOfBounds } from '../../services/labelGeometry';
 import { resolveObjectPrintMethod, getEffectiveObjectPrintMethodSettings } from '../../services/objectPrintMethodService';
+import { getMultiLineLayoutValue, getSingleLineLayoutValue } from '../../services/controlCharacterService';
 
 export interface TsplRenderOptions {
   dpi?: number;
@@ -68,7 +70,9 @@ export function renderTSPL(
       const rot = el.rotation === 90 ? 90 : el.rotation === 180 ? 180 : el.rotation === 270 ? 270 : 0;
 
       if (el.type === 'text') {
-        const txt = evaluateElementData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const rawTxt = evaluateElementData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const isSingleLine = (el as any).textType === 'single-line';
+        const layoutTxt = isSingleLine ? getSingleLineLayoutValue(rawTxt) : getMultiLineLayoutValue(rawTxt);
         const pt = el.fontSize || 12;
         let fontName = '3';
         let xMult = 1;
@@ -91,37 +95,76 @@ export function renderTSPL(
           yMult = scale;
         }
 
-        lines.push(`TEXT ${xD},${yD},"${fontName}",${rot},${xMult},${yMult},"${escapeTSPL(txt)}"`);
+        const lineSpacingDots = Math.round(pt * (dpi / 72) * (el.lineHeight || 1.15));
+        const textLines = layoutTxt.split('\n');
+        textLines.forEach((tLine, lineIndex) => {
+          const lineY = yD + lineIndex * lineSpacingDots;
+          lines.push(`TEXT ${xD},${lineY},"${fontName}",${rot},${xMult},${yMult},"${escapeTSPL(tLine)}"`);
+        });
       } else if (el.type === 'barcode') {
-        const val = evaluateElementData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const resolved = resolveBarcodeData(el, { record, printIndex: rIdx, currentRecordIndex: rIdx });
+        const { encodedValue, displayTextLines, includeText, placement, alignment, verticalOffsetMm, horizontalOffsetMm } = resolved;
         const barH = mmToDots(el.barHeight || el.height, dpi);
-        const printText = el.includeText !== false ? 1 : 0;
         const symbology = el.symbology || (el as any).barcodeType || 'code128';
+        const narrowDots = Math.max(1, Math.round((el.xDimensionMm || 0.38) * (dpi / 25.4)));
+        const wideDots = Math.max(narrowDots + 1, Math.round(narrowDots * (Number(el.ratio) || 2.5)));
+
+        const hasCustomReadable =
+          includeText &&
+          (placement === 'top' ||
+            verticalOffsetMm !== 0.8 ||
+            horizontalOffsetMm !== 0 ||
+            displayTextLines.length > 1 ||
+            resolved.humanReadableValue !== encodedValue ||
+            el.humanReadableFont ||
+            el.humanReadableFontSize);
+
+        const printTextNative = includeText && !hasCustomReadable ? 1 : 0;
+        const fontPt = el.humanReadableFontSize || el.fontSize || 10;
+        const fontH = Math.max(10, Math.round(fontPt * (dpi / 72)));
+        const barOffsetY = placement === 'top' && hasCustomReadable ? yD + fontH + mmToDots(verticalOffsetMm, dpi) : yD;
 
         switch (symbology) {
           case 'code39':
-            lines.push(`BARCODE ${xD},${yD},"39",${barH},${printText},${rot},2,4,"${escapeTSPL(val)}"`);
+            lines.push(`BARCODE ${xD},${barOffsetY},"39",${barH},${printTextNative},${rot},${narrowDots},${wideDots},"${escapeTSPL(encodedValue)}"`);
             break;
           case 'ean13':
-            lines.push(`BARCODE ${xD},${yD},"EAN13",${barH},${printText},${rot},2,2,"${escapeTSPL(val)}"`);
+            lines.push(`BARCODE ${xD},${barOffsetY},"EAN13",${barH},${printTextNative},${rot},${narrowDots},${narrowDots},"${escapeTSPL(encodedValue)}"`);
             break;
           case 'upca':
-            lines.push(`BARCODE ${xD},${yD},"UPCA",${barH},${printText},${rot},2,2,"${escapeTSPL(val)}"`);
+            lines.push(`BARCODE ${xD},${barOffsetY},"UPCA",${barH},${printTextNative},${rot},${narrowDots},${narrowDots},"${escapeTSPL(encodedValue)}"`);
             break;
           case 'qr':
           case 'gs1-qr':
             const qrMag = Math.max(2, Math.min(10, Math.round(wD / 25)));
-            lines.push(`QRCODE ${xD},${yD},L,${qrMag},A,${rot},"${escapeTSPL(val)}"`);
+            lines.push(`QRCODE ${xD},${barOffsetY},L,${qrMag},A,${rot},"${escapeTSPL(encodedValue)}"`);
             break;
           case 'datamatrix':
           case 'gs1-datamatrix':
-            lines.push(`DMATRIX ${xD},${yD},${wD},${hD},"${escapeTSPL(val)}"`);
+            lines.push(`DMATRIX ${xD},${barOffsetY},${wD},${hD},"${escapeTSPL(encodedValue)}"`);
             break;
           case 'code128':
           case 'gs1-128':
           default:
-            lines.push(`BARCODE ${xD},${yD},"128",${barH},${printText},${rot},2,2,"${escapeTSPL(val)}"`);
+            lines.push(`BARCODE ${xD},${barOffsetY},"128",${barH},${printTextNative},${rot},${narrowDots},${narrowDots},"${escapeTSPL(encodedValue)}"`);
             break;
+        }
+
+        // Discrete Human-Readable Text rendering for exact BarTender placement/transforms
+        if (hasCustomReadable && displayTextLines.length > 0) {
+          const vOffsetDots = mmToDots(verticalOffsetMm, dpi);
+          const hOffsetDots = mmToDots(horizontalOffsetMm, dpi);
+
+          displayTextLines.forEach((lineText, lIdx) => {
+            let lineY = yD;
+            if (placement === 'top') {
+              lineY = yD + lIdx * fontH;
+            } else {
+              lineY = yD + barH + vOffsetDots + lIdx * fontH;
+            }
+            const lineX = xD + hOffsetDots;
+            lines.push(`TEXT ${lineX},${lineY},"3",${rot},1,1,"${escapeTSPL(lineText)}"`);
+          });
         }
       } else if (el.type === 'shape') {
         const strokeD = Math.max(1, mmToDots(el.strokeWidth || 0.5, dpi));

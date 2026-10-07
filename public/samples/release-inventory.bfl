@@ -1,0 +1,156 @@
+{
+  "format": "BarcodeFlowDocument",
+  "version": 1,
+  "documentId": "release-inventory",
+  "name": "Release Inventory Label",
+  "type": "template",
+  "template": {
+    "id": "release-inventory",
+    "name": "Release Inventory Label",
+    "description": "Portable editable verification fixture",
+    "category": "Asset & Inventory",
+    "version": "1.0",
+    "status": "draft",
+    "tags": [
+      "Release Fixture"
+    ],
+    "dimensions": {
+      "width": 100,
+      "height": 60,
+      "unit": "mm",
+      "dpi": 300,
+      "orientation": "landscape"
+    },
+    "margins": {
+      "top": 0,
+      "left": 0,
+      "right": 0,
+      "bottom": 0,
+      "bleed": 0,
+      "safeZone": 0
+    },
+    "elements": [
+      {
+        "id": "batch",
+        "name": "batch",
+        "type": "text",
+        "x": 4,
+        "y": 4,
+        "width": 80,
+        "height": 7,
+        "rotation": 0,
+        "text": "Batch: {{BatchNo}}",
+        "textType": "single-line",
+        "fontFamily": "Arial",
+        "fontSize": 11,
+        "color": "#000000",
+        "fontWeight": "normal",
+        "fontStyle": "normal",
+        "textDecoration": "none",
+        "textAlign": "left",
+        "verticalAlign": "top",
+        "lineHeight": 1.2,
+        "visible": true,
+        "printable": true
+      },
+      {
+        "id": "serial",
+        "name": "serial",
+        "type": "text",
+        "x": 4,
+        "y": 14,
+        "width": 80,
+        "height": 7,
+        "rotation": 0,
+        "text": "Serial: 000101",
+        "textType": "single-line",
+        "fontFamily": "Arial",
+        "fontSize": 11,
+        "color": "#000000",
+        "fontWeight": "normal",
+        "fontStyle": "normal",
+        "textDecoration": "none",
+        "textAlign": "left",
+        "verticalAlign": "top",
+        "lineHeight": 1.2,
+        "visible": true,
+        "printable": true
+      },
+      {
+        "id": "product-barcode",
+        "name": "Product Barcode",
+        "type": "barcode",
+        "x": 4,
+        "y": 30,
+        "width": 70,
+        "height": 20,
+        "rotation": 0,
+        "value": "{{SKU}}",
+        "symbology": "code128",
+        "barWidth": 2,
+        "barHeight": 12,
+        "includeText": true,
+        "humanReadableFont": "Arial",
+        "humanReadableFontSize": 10,
+        "foregroundColor": "#000000",
+        "backgroundColor": "#ffffff",
+        "visible": true,
+        "printable": true
+      }
+    ],
+    "variables": [],
+    "sampleRecords": [
+      {
+        "ProductName": "Industrial Fastener Kit",
+        "SKU": "000101",
+        "Barcode": "5901234123457",
+        "Price": "450.00",
+        "Qty": "2",
+        "BatchNo": "B101",
+        "Stock": "20",
+        "ExpiryDays": "90",
+        "MFGDate": "18/09/2026"
+      }
+    ],
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-10-01T07:29:17.458Z",
+    "createdBy": "Release Fixture"
+  },
+  "dataConnections": [],
+  "dependencies": {
+    "fonts": [
+      "Arial"
+    ],
+    "images": [],
+    "credentialsIncluded": false,
+    "sampleDataIncluded": true,
+    "warnings": [
+      "Font \"Arial\" is referenced, not embedded; installation or substitution is required on the receiving computer.",
+      "Connection credential fields are removed. Review scripts, sample records, and custom metadata for embedded secrets before sharing."
+    ]
+  },
+  "printerSettings": null,
+  "pageSetup": {
+    "dimensions": {
+      "width": 100,
+      "height": 60,
+      "unit": "mm",
+      "dpi": 300,
+      "orientation": "landscape"
+    },
+    "margins": {
+      "top": 0,
+      "left": 0,
+      "right": 0,
+      "bottom": 0,
+      "bleed": 0,
+      "safeZone": 0
+    }
+  },
+  "metadata": {
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-10-01T07:29:17.458Z",
+    "savedBy": "Operator",
+    "appVersion": "2.5.0"
+  }
+}

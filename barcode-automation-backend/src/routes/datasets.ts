@@ -1,3 +1,4 @@
+import { getDataDirectory } from '../runtimePaths';
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -418,7 +419,7 @@ datasetsRouter.post('/test-connection', (req: Request, res: Response) => {
 
     // If uploaded as base64 in web browser mode, persist into data/linked_uploads/
     if (base64Content) {
-      const uploadDir = path.resolve(process.cwd(), 'barcode-automation-backend/data/linked_uploads');
+      const uploadDir = path.join(getDataDirectory(), 'linked_uploads');
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
@@ -537,7 +538,7 @@ datasetsRouter.post('/inspect-excel', (req: Request, res: Response) => {
 
     // If uploaded as base64 in web browser mode, persist into data/linked_uploads/
     if (!targetPath && base64Content) {
-      const uploadDir = path.resolve(process.cwd(), 'barcode-automation-backend/data/linked_uploads');
+      const uploadDir = path.join(getDataDirectory(), 'linked_uploads');
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
@@ -592,7 +593,7 @@ datasetsRouter.post('/link-excel', (req: Request, res: Response) => {
 
     let targetPath = filePath;
     if ((!targetPath || !fs.existsSync(targetPath)) && base64Content) {
-      const uploadDir = path.resolve(process.cwd(), 'barcode-automation-backend/data/linked_uploads');
+      const uploadDir = path.join(getDataDirectory(), 'linked_uploads');
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }

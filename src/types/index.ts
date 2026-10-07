@@ -6,38 +6,63 @@ export type ElementType = 'text' | 'barcode' | 'shape' | 'image' | 'table' | 'li
 export type ShapeType = 'rectangle' | 'circle' | 'ellipse' | 'line' | 'polygon';
 
 export type BarcodeSymbology = 
-  | 'posicode-b'
-  | 'posicode-a'
   | 'code128' 
   | 'code39' 
   | 'code93' 
-  | 'datamatrix' 
-  | 'qr' 
-  | 'pdf417' 
-  | 'pdf417-truncated'
+  | 'codabar' 
   | 'ean13' 
   | 'ean8' 
+  | 'ean2'
+  | 'ean5'
   | 'upca' 
   | 'upce' 
   | 'itf14' 
   | 'interleaved2of5'
-  | 'codabar' 
+  | 'industrial2of5'
+  | 'standard2of5'
+  | 'matrix2of5'
+  | 'datalogic2of5'
   | 'msi' 
-  | 'gs1-128' 
-  | 'gs1-datamatrix' 
-  | 'gs1-qr'
-  | 'gs1-databar'
-  | 'aztec' 
-  | 'maxicode' 
-  | 'micro-qr'
-  | 'pharmacode' 
-  | 'patchcode'
+  | 'plessey'
   | 'telepen'
+  | 'posicode-a'
+  | 'posicode-b'
+  | 'pharmacode' 
+  | 'pzn'
+  | 'patchcode'
   | 'tlc39'
   | 'hibc-128'
   | 'hibc-datamatrix'
+  | 'deutschepost-identcode'
+  | 'deutschepost-leitcode'
+  | 'japanpost'
+  | 'koreapost'
+  | 'kix'
+  | 'royalmail'
   | 'usps-imb'
-  | 'royalmail';
+  | 'planet'
+  | 'postnet'
+  | 'gs1-128' 
+  | 'gs1-databar'
+  | 'gs1-databar-stacked'
+  | 'gs1-databar-expanded'
+  | 'gs1-databar-expanded-stacked'
+  | 'gs1-composite'
+  | 'datamatrix' 
+  | 'gs1-datamatrix' 
+  | 'qr' 
+  | 'micro-qr'
+  | 'gs1-qr'
+  | 'pdf417' 
+  | 'pdf417-truncated'
+  | 'micropdf417'
+  | 'aztec' 
+  | 'maxicode' 
+  | 'dotcode'
+  | 'hanxin'
+  | 'gridmatrix'
+  | 'iqr'
+  | 'ultracode';
 
 export type UserRole = 'Super Admin' | 'Admin' | 'Designer' | 'Approver Level 1' | 'Approver Level 2' | 'Viewer / Print Operator';
 
@@ -165,14 +190,21 @@ export type DataSourceType =
   | 'variable' 
   | 'system'
   | 'linked'
+  | 'object'
+  | 'global'
+  | 'external_file'
+  | 'print_job'
   | 'gs1_ai'
   | 'gs1_composite'
-  | 'gs1_databar';
+  | 'gs1_databar'
+  | 'control-character';
 
 export interface TransformRule {
   id: string;
-  type: 'truncate' | 'substring' | 'search_replace' | 'regex' | 'trim' | 'case' | 'pad' | 'prefix_suffix' | 'math' | 'encode_decode';
-  params: {
+  name?: string;
+  order?: number;
+  type: 'truncate' | 'substring' | 'search_replace' | 'regex' | 'trim' | 'case' | 'pad' | 'prefix_suffix' | 'math' | 'encode_decode' | 'script';
+  params?: {
     startIndex?: number;
     length?: number;
     search?: string;
@@ -191,8 +223,52 @@ export interface TransformRule {
     mathValue?: number;
     encodeType?: 'base64' | 'hex' | 'url';
     encodeAction?: 'encode' | 'decode';
+    scriptCode?: string;
+    scriptLanguage?: 'javascript' | 'vbscript';
+    code?: string;
+    language?: 'javascript' | 'vbscript';
   };
+  enabled: boolean;
+  scriptLanguage?: 'javascript' | 'vbscript';
+  scriptCode?: string;
 }
+
+
+
+export interface EvaluationContext {
+  record?: Record<string, any>;
+  datasets?: any[];
+  connectedDataset?: any;
+  variables?: VariableDefinition[];
+  namedDataSources?: NamedDataSource[];
+  calculatedFields?: CalculatedFieldDefinition[];
+  elements?: LabelElement[];
+  currentRecordIndex?: number;
+  totalRecords?: number;
+  printerName?: string;
+  jobId?: string;
+  jobName?: string;
+  userName?: string;
+  computerName?: string;
+  pageNumber?: number;
+  totalPages?: number;
+  copyNumber?: number;
+  printIndex?: number;
+  globalData?: Record<string, any>;
+  resolutionStack?: Set<string>;
+  documentName?: string;
+  filePath?: string;
+  databaseRecord?: any;
+  batchIndex?: number;
+  totalBatches?: number;
+  recordsCount?: number;
+  error?: string;
+  symbolOnly?: boolean;
+  isPartial?: boolean;
+  system?: any;
+  [key: string]: any;
+}
+
 
 export interface DynamicValueSource {
   sourceType: 'constant' | 'database' | 'named_source' | 'unlimited';
@@ -252,11 +328,20 @@ export interface SerializationDefinition {
   resetValue?: string;
 }
 
-export interface SerializationConfig extends SerializationDefinition {
+export interface SerializationConfig extends Partial<SerializationDefinition> {
+  enabled?: boolean;
+  type?: 'numeric' | 'alphabetic' | 'alphanumeric' | 'custom' | string;
+  step?: number;
+  direction?: 'increment' | 'decrement';
   currentValue?: string;
+  nextValue?: string;
   lastResetAt?: string;
   lastResetReason?: string;
+  padZeros?: boolean;
+  padLength?: number;
 }
+
+
 
 export interface SerializationState {
   sourceId: string;
@@ -434,11 +519,44 @@ export interface AutoSizeConfig {
   verticalAlignment?: 'top' | 'middle' | 'bottom';
 }
 
+export interface DataSourceFontOverride {
+  fontFamily?: string;
+  fontSize?: number; // in pt
+  fontWeight?: 'normal' | 'bold' | '600' | '700' | '800';
+  fontStyle?: 'normal' | 'italic';
+  underline?: boolean;
+  strikeout?: boolean;
+  whiteOnBlack?: boolean;
+  color?: string; // Foreground Color
+  backgroundColor?: string; // Background Color
+  fontWidthScale?: number; // 100% default
+  textOutline?: {
+    enabled: boolean;
+    color: string;
+    width: number;
+  };
+  letterSpacing?: number;
+}
+
+export interface ResolvedTextRun {
+  sourceId: string;
+  type: 'text' | 'control';
+  value: string;
+  controlCode?: string;
+  style: DataSourceFontOverride;
+}
+
 export interface DataSourceItem {
   id: string;
   name: string;
   type: DataSourceType;
   value: string;
+  valueEncoding?: 'raw' | 'legacy-control-tokens';
+  // Control Character structured fields
+  controlCode?: string;
+  code?: string;
+  decimal?: number;
+  hex?: string;
   // Data Type & Formatting
   dataType?: 'text' | 'number' | 'integer' | 'decimal' | 'currency' | 'date' | 'time' | 'datetime' | 'boolean';
   numberFormat?: {
@@ -457,13 +575,10 @@ export interface DataSourceItem {
     prefix?: string;
     suffix?: string;
   };
-  fontOverride?: {
-    fontFamily?: string;
-    fontSize?: number;
-    fontWeight?: 'normal' | 'bold';
-    fontStyle?: 'normal' | 'italic';
-    color?: string;
-  };
+  // Font per Data Source Overrides
+  fontOverrideEnabled?: boolean;
+  fontStyleOverride?: DataSourceFontOverride;
+  fontOverride?: DataSourceFontOverride;
   // Database
   databaseField?: string;
   field?: string;
@@ -482,13 +597,33 @@ export interface DataSourceItem {
   serialResetRule?: 'never' | 'daily' | 'monthly' | 'yearly' | 'job';
   currentSerialValue?: number;
   // Date / Clock
-  dateOffsetDays?: number;
-  dateOffsetMonths?: number;
-  dateOffsetYears?: number;
+  clockBase?: 'date' | 'time' | 'datetime' | 'database_field';
+  clockBaseField?: string;
+  dateOffsetDays?: number | string;
+  dateOffsetDaysSource?: 'fixed' | 'database_field' | 'formula' | 'named_source';
+  dateOffsetDaysField?: string;
+  dateOffsetMonths?: number | string;
+  dateOffsetMonthsSource?: 'fixed' | 'database_field' | 'formula' | 'named_source';
+  dateOffsetMonthsField?: string;
+  dateOffsetYears?: number | string;
+  dateOffsetYearsSource?: 'fixed' | 'database_field' | 'formula' | 'named_source';
+  dateOffsetYearsField?: string;
+  timeOffsetHours?: number | string;
+  timeOffsetHoursSource?: 'fixed' | 'database_field' | 'formula' | 'named_source';
+  timeOffsetHoursField?: string;
+  timeOffsetMinutes?: number | string;
+  timeOffsetMinutesSource?: 'fixed' | 'database_field' | 'formula' | 'named_source';
+  timeOffsetMinutesField?: string;
+  timeOffsetSeconds?: number | string;
+  timeOffsetSecondsSource?: 'fixed' | 'database_field' | 'formula' | 'named_source';
+  timeOffsetSecondsField?: string;
+  clockDateFormat?: string;
+  clockTimeFormat?: string;
   dateType?: 'current' | 'expiry' | 'mfg' | 'custom';
   // Script
   scriptLanguage?: 'javascript' | 'vbscript';
   scriptCode?: string;
+  scriptMode?: 'expression' | 'multiline';
   // Prompt at print time
   promptLabel?: string;
   promptDefault?: string;
@@ -499,9 +634,18 @@ export interface DataSourceItem {
   formulaExpression?: string;
   counterId?: string;
   serialSequenceId?: string;
-  // Linked object
+  // Linked / Object value
   linkedObjectId?: string;
   linkedProperty?: string;
+  // Global Data
+  globalField?: string;
+  // External File
+  filePath?: string;
+  fileEncoding?: string;
+  fileRow?: number;
+  fileColumn?: string | number;
+  // Print Job
+  printJobField?: 'job_name' | 'printer_name' | 'copies' | 'record_number' | 'total_records' | 'timestamp';
   // GS1 Application Identifier Data Source
   gs1AIs?: GS1Field[];
   // GS1 Composite
@@ -511,12 +655,27 @@ export interface DataSourceItem {
   // GS1 DataBar
   gs1DataBarVariant?: 'omnidirectional' | 'stacked' | 'expanded' | 'expanded_stacked';
   gs1DataBarSegments?: number;
+  onProcessDataScript?: string;
+  onProcessDataLanguage?: 'javascript' | 'vbscript';
+  onProcessDataEnabled?: boolean;
   enabled: boolean;
 }
 
+export interface ScriptLibrary {
+  id: string;
+  name: string;
+  language: 'vbscript' | 'javascript';
+  code: string;
+  description?: string;
+  enabled: boolean;
+  filePath?: string;
+  isExternal?: boolean;
+}
+
 export interface ObjectEventHook {
-  event: 'OnLoad' | 'BeforePrint' | 'AfterPrint' | 'OnValidate';
+  event: 'OnLoad' | 'BeforePrint' | 'AfterPrint' | 'OnValidate' | 'OnProcessData' | string;
   script: string;
+  language?: 'javascript' | 'vbscript';
 }
 
 export interface BaseElement extends PositionAndSize {
@@ -561,6 +720,25 @@ export interface BaseElement extends PositionAndSize {
     colors: string[];
     angle: number;
   };
+  color?: string;
+  foregroundColor?: string;
+  backgroundColor?: string;
+  isGs1?: boolean;
+  effectsConfig?: {
+    outline?: boolean;
+    outlineColor?: string;
+    outlineWidth?: number;
+    shadow?: boolean;
+    shadowColor?: string;
+    shadowBlur?: number;
+    shadowOffsetX?: number;
+    shadowOffsetY?: number;
+    opacity?: number;
+    letterSpacing?: number;
+    lineSpacing?: number;
+    strikeout?: boolean;
+    underline?: boolean;
+  };
 }
 
 export type TextObjectType = 
@@ -574,11 +752,39 @@ export type TextObjectType =
   | 'html'
   | 'xaml';
 
+export type AutoFitMode = 'none' | 'auto-width' | 'auto-height' | 'fit-text-to-box' | 'shrink-to-fit';
+export type TextSizingMode = 'scale-text' | 'auto-width' | 'fixed-width' | 'shrink-to-fit' | 'fit-to-box';
+
+export interface FormattedTextRun {
+  id?: string;
+  text: string;
+  fontFamily?: string;
+  fontSize?: number; // pt
+  fontWeight?: 'normal' | 'bold' | '600' | '700' | '800';
+  fontStyle?: 'normal' | 'italic';
+  underline?: boolean;
+  strikeout?: boolean;
+  color?: string;
+  backgroundColor?: string;
+  dataBinding?: string;
+}
+
+export interface WordProcessorBlock {
+  id?: string;
+  type: 'paragraph' | 'heading' | 'bullet-list' | 'numbered-list';
+  align?: 'left' | 'center' | 'right' | 'justify';
+  lineSpacing?: number;
+  runs: FormattedTextRun[];
+}
+
 export interface TextElement extends BaseElement {
   type: 'text';
   text: string;
   textType?: TextObjectType;
-  textFormatType?: 'single-line' | 'paragraph' | 'arc';
+  textFormatType?: 'single-line' | 'multi-line' | 'paragraph' | 'arc';
+  sizingMode?: TextSizingMode;
+  paragraphWidth?: number;
+  overflow?: 'visible' | 'hidden' | 'clip';
   // Typography
   fontFamily: string;
   fontSize: number; // in pt
@@ -595,20 +801,26 @@ export interface TextElement extends BaseElement {
   lineHeight: number;
   letterSpacing: number;
   dataBinding?: string; // e.g. "{{PRODUCT_NAME}}"
-  // Format & AutoSize
+  // Format & AutoSize / Fit
   autoFit?: boolean;
   autoSize?: boolean;
+  autoHeight?: boolean;
+  autoFitMode?: AutoFitMode;
   autoSizeConfig?: AutoSizeConfig;
   minFontSize?: number;
   maxFontSize?: number;
   minWidthScale?: number;
   maxWidthScale?: number;
-  textAlign: 'left' | 'center' | 'right' | 'justify';
+  textAlign: 'left' | 'center' | 'right' | 'justify' | 'distributed';
+  orphanAlignment?: 'left' | 'center' | 'right';
   verticalAlign: 'top' | 'middle' | 'bottom';
   horizontalAlignment?: 'left' | 'center' | 'right' | 'justify';
   verticalAlignment?: 'top' | 'middle' | 'bottom';
   lineSpacing?: number;
   tabStops?: number[];
+  indentationMode?: 'none' | 'first-line' | 'hanging';
+  indentationMm?: number;
+  defaultTabIntervalMm?: number;
   wordWrap?: boolean;
   wrap?: boolean;
   multiline?: boolean;
@@ -632,8 +844,18 @@ export interface TextElement extends BaseElement {
   borderCornerType?: 'square' | 'rounded' | 'concave';
   borderCornerSize?: number;
   borderSides?: { top: boolean; right: boolean; bottom: boolean; left: boolean };
-  // HTML / Rich
+  // Word Processor structured model & rich runs
+  runs?: FormattedTextRun[];
+  blocks?: WordProcessorBlock[];
   richContentHtml?: string;
+  // Markup containers
+  rtfRaw?: string;
+  xamlRaw?: string;
+  sanitizedHtml?: string;
+  // Symbol character properties
+  symbolUnicode?: string;
+  symbolFont?: string;
+  // Text Outline
   textOutline?: {
     enabled: boolean;
     color: string;
@@ -680,7 +902,7 @@ export interface BarcodeElement extends BaseElement {
   humanReadableFont?: string;
   humanReadableFontSize?: number;
   humanReadableFontStyle?: 'regular' | 'italic' | 'bold' | 'bold-italic';
-  humanReadableAlignment?: 'left' | 'center' | 'right';
+  humanReadableAlignment?: 'left' | 'center' | 'centered' | 'right';
   humanReadableOffsetV?: number;
   humanReadableOffsetH?: number;
   humanReadableUnderline?: boolean;
@@ -692,14 +914,14 @@ export interface BarcodeElement extends BaseElement {
   humanReadablePrefix?: string;
   humanReadableSuffix?: string;
   humanReadableLetterSpacing?: number;
-  textFormatType?: 'single-line' | 'paragraph';
+  textFormatType?: 'single-line' | 'multi-line' | 'paragraph';
   autoSize?: boolean;
   autoSizeText?: boolean;
   minFontSize?: number;
   maxFontSize?: number;
   minWidthScale?: number;
   maxWidthScale?: number;
-  horizontalAlignment?: 'left' | 'center' | 'right';
+  horizontalAlignment?: 'left' | 'center' | 'centered' | 'right';
   verticalAlignment?: 'top' | 'middle' | 'bottom';
   tabsConfig?: Array<{
     id: string;
@@ -707,21 +929,6 @@ export interface BarcodeElement extends BaseElement {
     alignment: 'left' | 'center' | 'right' | 'decimal';
     leader: 'none' | 'dots' | 'dashes' | 'line';
   }>;
-  effectsConfig?: {
-    outline?: boolean;
-    outlineColor?: string;
-    outlineWidth?: number;
-    shadow?: boolean;
-    shadowColor?: string;
-    shadowBlur?: number;
-    shadowOffsetX?: number;
-    shadowOffsetY?: number;
-    opacity?: number;
-    letterSpacing?: number;
-    lineSpacing?: number;
-    strikeout?: boolean;
-    underline?: boolean;
-  };
   borderType?: 'none' | 'rectangle' | 'ellipse';
   borderThickness?: number;
   borderColor?: string;
@@ -735,13 +942,75 @@ export interface BarcodeElement extends BaseElement {
   borderPadding?: number;
   textEncoding?: string;
   density?: number;
+  xDimensionMm?: number;
+  lockXDimension?: boolean;
+  xDimensionUnits?: 'mm' | 'mils' | 'auto';
+  autoSizeToWidth?: boolean;
+  requestedWidthMm?: number;
+  minXDimensionMm?: number;
+  maxXDimensionMm?: number;
+  ratioMode?: 'auto' | 'standard' | 'custom' | 'manual';
   ratio?: string | number;
+  heightMm?: number;
+  checkDigitMode?: 'auto' | 'manual' | 'none' | 'include' | 'exclude';
+  codeSet?: 'auto' | 'A' | 'B' | 'C' | 'Auto';
+  gs1Mode?: boolean;
+  barSpaceAdjustment?: {
+    mode: 'none' | 'reduce' | 'increase' | 'reduceBar' | 'increaseBar';
+    dots: number;
+  };
+  printMethod?: 'auto' | 'native' | 'vector' | 'raster' | 'native_printer';
   posiCodeVersion?: string;
   useGs1Data?: boolean;
   charTemplate?: string;
   searchReplace?: string;
   vbScript?: string;
   prefixSuffix?: string;
+  moduleWidth?: number;
+  symbol?: {
+    barHeight?: number;
+    moduleWidth?: number;
+  };
+  humanReadable?: HumanReadableConfig;
+}
+
+export interface HumanReadableConfig {
+  enabled?: boolean;
+  visibility?: 'full' | 'none' | 'perSource';
+  visibleSourceIds?: string[];
+  placement?: 'bottom' | 'top';
+  alignment?: 'left' | 'center' | 'centered' | 'right';
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: string;
+  fontStyle?: string;
+  textDecoration?: string;
+  color?: string;
+  gap?: number;
+  marginTop?: number;
+  verticalOffsetMm?: number;
+  horizontalOffsetMm?: number;
+  hideCheckDigit?: boolean;
+  gs1Template?: 'none' | 'standard' | 'custom' | string;
+  lineBreakAfterAi?: boolean;
+  characterTemplate?: {
+    template?: string;
+  };
+  searchReplace?: Array<{
+    find: string;
+    replace: string;
+    caseSensitive?: boolean;
+    wholeWord?: boolean;
+    isRegex?: boolean;
+  }>;
+  script?: {
+    language: 'javascript' | 'vbscript';
+    code: string;
+  };
+  prefixSuffix?: {
+    prefix?: string;
+    suffix?: string;
+  };
 }
 
 export interface ShapeElement extends BaseElement {
@@ -764,6 +1033,13 @@ export interface ImageElement extends BaseElement {
   grayscale: boolean;
   invert: boolean;
   aspectRatioLocked: boolean;
+  /** Data-bound image (spec 27): database field / token that resolves to a path or URL */
+  imageSourceType?: 'static' | 'database';
+  imageField?: string;
+  /** Optional base folder to resolve relative image file names against */
+  imageBaseFolder?: string;
+  /** Fallback image src used when the resolved path is missing/invalid/empty */
+  fallbackSrc?: string;
 }
 
 export interface TableCell {
@@ -846,6 +1122,8 @@ export interface TemplatePrinterConfig {
   renderer?: string;
   manufacturer?: string;
   model?: string;
+  sourcePrinterName?: string;
+  isAvailable?: boolean;
 }
 
 export interface TemplatePrintOrder {
@@ -930,6 +1208,36 @@ export interface ExcelColumnDefinition {
   defaultValue?: string;
 }
 
+export type RecordFilterOperator =
+  | 'equals'
+  | 'notEquals'
+  | 'contains'
+  | 'notContains'
+  | 'startsWith'
+  | 'endsWith'
+  | 'greaterThan'
+  | 'greaterThanOrEqual'
+  | 'lessThan'
+  | 'lessThanOrEqual'
+  | 'isEmpty'
+  | 'isNotEmpty'
+  | 'isNull'
+  | 'isNotNull'
+  | 'between';
+
+export interface RecordFilterCondition {
+  field: string;
+  operator: RecordFilterOperator;
+  value?: any;
+  value2?: any;
+  logic?: 'AND' | 'OR';
+}
+
+export interface RecordSortCondition {
+  field: string;
+  direction: 'asc' | 'desc';
+}
+
 export interface DatabaseConnectionConfig {
   id: string;
   name: string;
@@ -953,6 +1261,10 @@ export interface DatabaseConnectionConfig {
   autoRefresh?: boolean;
   quantityColumn?: string;
   mapping?: Record<string, string>;
+  /** Persisted structured filters that drive the visible record set (spec 23) */
+  recordFilters?: RecordFilterCondition[];
+  /** Persisted multi-field sort priority list (spec 24) */
+  recordSort?: RecordSortCondition[];
 }
 
 export interface ValidationIssue {
@@ -978,6 +1290,19 @@ export interface NamedDataSource {
   serialSequenceId?: string;
   counterId?: string;
   transforms?: TransformRule[];
+}
+
+/**
+ * Calculated (derived) field available like a regular field to Text, Barcode,
+ * Scripts and Named Sources. Example: Total = Price * Quantity (spec 17).
+ */
+export interface CalculatedFieldDefinition {
+  id: string;
+  name: string; // e.g. "Total", "GSTAmount", "FinalPrice"
+  formula: string; // formulaEngine expression, e.g. "Price * Quantity"
+  description?: string;
+  enabled?: boolean;
+  format?: DataTypeFormatConfig;
 }
 
 export type TextPrintMethod = 'auto' | 'text-output' | 'vector' | 'raster';
@@ -1013,6 +1338,7 @@ export interface LabelTemplate {
   elements: LabelElement[];
   variables: VariableDefinition[];
   namedDataSources?: NamedDataSource[];
+  calculatedFields?: CalculatedFieldDefinition[];
   dataEntryForm?: import('./formTypes').DataEntryFormDefinition;
   sampleRecords: Record<string, string>[];
   databaseConnection?: DatabaseConnectionConfig;
@@ -1031,7 +1357,39 @@ export interface LabelTemplate {
   printOrder?: TemplatePrintOrder;
   background?: TemplateBackgroundConfig;
   objectPrintMethodSettings?: ObjectPrintMethodSettings;
+  eventScripts?: Record<string, string>;
+  eventScriptLanguages?: Record<string, 'javascript' | 'vbscript'>;
+  scriptLibraries?: ScriptLibrary[];
+  codeModifierConfig?: PrinterCodeModifierConfig;
+  sourceMetadata?: Record<string, any>;
+  importReport?: any;
 }
+
+export interface PrinterCodeModifierRule {
+  id: string;
+  name: string;
+  type: 'prefix' | 'suffix' | 'search_replace' | 'custom_script';
+  enabled: boolean;
+  searchPattern?: string;
+  replacementText?: string;
+  isRegex?: boolean;
+  prefixText?: string;
+  suffixText?: string;
+  script?: string;
+  scriptLanguage?: 'javascript' | 'vbscript';
+}
+
+export interface PrinterCodeModifierConfig {
+  enabled: boolean;
+  rules?: PrinterCodeModifierRule[];
+  prefix?: string;
+  suffix?: string;
+  substitutions?: Array<{ find: string; replace: string; isRegex?: boolean }>;
+  customScript?: string;
+  scriptLanguage?: 'javascript' | 'vbscript';
+}
+
+
 
 export interface TemplateComment {
   id: string;
@@ -1287,6 +1645,7 @@ export interface OpenDocument {
   template?: LabelTemplate;
   form?: DataEntryFormDefinition;
   selectedElementIds: string[];
+  dependencies?: BarcodeFlowDocumentFile['dependencies'];
   history: {
     entries: LabelElement[][];
     index: number;
@@ -1314,6 +1673,13 @@ export interface BarcodeFlowDocumentFile {
   dataConnections?: any[];
   printerSettings?: any;
   pageSetup?: any;
+  dependencies?: {
+    fonts: string[];
+    images: Array<{ objectId: string; embedded: boolean }>;
+    credentialsIncluded: false;
+    sampleDataIncluded: boolean;
+    warnings: string[];
+  };
   metadata?: {
     createdAt?: string;
     updatedAt?: string;
@@ -1323,9 +1689,15 @@ export interface BarcodeFlowDocumentFile {
 }
 
 export interface RecentDocumentEntry {
+  id?: string;
+  absolutePath?: string;
+  displayName?: string;
   filePath: string;
   fileName: string;
   lastOpenedAt: string;
+  lastModified?: string;
+  fileType?: string;
+  fileSize?: number;
   templateName?: string;
 }
 
@@ -1403,4 +1775,3 @@ declare global {
 }
 
 export * from './formTypes';
-

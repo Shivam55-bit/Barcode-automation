@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DatabaseService } from '../db/databaseService';
+import { getDataDirectory } from '../runtimePaths';
 import { INITIAL_TEMPLATES } from '../../../src/services/initialTemplates';
 import {
   INITIAL_PRINTERS,
@@ -10,7 +11,7 @@ import {
   INITIAL_BATCH_JOBS,
 } from '../../../src/services/mockDataService';
 
-const DATA_DIR = path.resolve(process.cwd(), 'barcode-automation-backend/data');
+const DATA_DIR = getDataDirectory();
 
 export class StorageService {
   private static instance: StorageService;
@@ -50,11 +51,11 @@ export class StorageService {
       approvals: [],
       approvalComments: [],
       viewerLogs: [],
-      printers: INITIAL_PRINTERS,
-      printJobs: INITIAL_PRINT_JOBS,
-      auditLogs: INITIAL_AUDIT_LOGS,
-      users: INITIAL_USERS,
-      batchJobs: INITIAL_BATCH_JOBS || [],
+      printers: process.env.BARCODEFLOW_DESKTOP === '1' ? [] : INITIAL_PRINTERS,
+      printJobs: process.env.BARCODEFLOW_DESKTOP === '1' ? [] : INITIAL_PRINT_JOBS,
+      auditLogs: process.env.BARCODEFLOW_DESKTOP === '1' ? [] : INITIAL_AUDIT_LOGS,
+      users: process.env.BARCODEFLOW_DESKTOP === '1' ? [] : INITIAL_USERS,
+      batchJobs: process.env.BARCODEFLOW_DESKTOP === '1' ? [] : INITIAL_BATCH_JOBS || [],
     };
 
     for (const [key, defaultData] of Object.entries(seedMap)) {

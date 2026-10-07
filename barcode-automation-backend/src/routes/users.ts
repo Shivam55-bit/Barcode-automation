@@ -2,43 +2,56 @@ import { Router, Request, Response } from 'express';
 import { StorageService } from '../services/storageService';
 import { logBackendAudit } from '../services/auditService';
 import { INITIAL_USERS } from '../../../src/services/mockDataService';
+import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
 export const usersRouter = Router();
 const storage = StorageService.getInstance();
 
 export function getUsers(): any[] {
-  const list = storage.read<any>('users', INITIAL_USERS);
-  // Ensure Super Admin always exists
-  const hasSuperAdmin = list.some((u: any) => u.email?.toLowerCase() === 'superadmin@gmail.com');
-  if (!hasSuperAdmin) {
-    const superAdmin = INITIAL_USERS.find((u: any) => u.email?.toLowerCase() === 'superadmin@gmail.com') || {
-      id: 'usr-super-admin',
-      name: 'Super Administrator',
-      email: 'superadmin@gmail.com',
-      password: 'superadmin@gmail.com',
-      role: 'Super Admin',
-      department: 'Enterprise Security & Governance',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces',
-      status: 'approved',
-      isApproved: true,
-      createdAt: '2026-08-01T00:00:00Z',
-      permissions: {
-        canDesignTemplates: true,
-        canCreateTemplates: true,
-        canDeleteTemplates: true,
-        canApproveWorkflow: true,
-        canPrintAndSpool: true,
-        canManageDatasets: true,
-        canCalibratePrinters: true,
-        canManageLicense: true,
-        canDownloadDesktopApp: true,
-        canViewAuditLogs: true,
-      },
-    };
-    list.unshift(superAdmin);
-    storage.write('users', list);
+  return storage.read<any>('users', process.env.BARCODEFLOW_DESKTOP === '1' ? [] : INITIAL_USERS);
+}
+
+function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString('hex');
+  return `scrypt$${salt}$${scryptSync(password, salt, 64).toString('hex')}`;
+}
+
+function verifyPassword(user: any, password: string): boolean {
+  if (typeof user.passwordHash === 'string') {
+    const match = /^scrypt\$([a-f0-9]{32})\$([a-f0-9]{128})$/.exec(user.passwordHash);
+    return !!match && timingSafeEqual(scryptSync(password, match[1], 64), Buffer.from(match[2], 'hex'));
   }
-  return list;
+  if (typeof user.password !== 'string' || !user.password) return false;
+  const stored = Buffer.from(user.password, 'utf8');
+  const supplied = Buffer.from(password, 'utf8');
+  return stored.length === supplied.length && timingSafeEqual(stored, supplied);
+}
+
+function canInitializeLegacyPassword(user: any): boolean {
+  return user.password === undefined && user.passwordHash === undefined &&
+    user.isApproved !== false && !['pending_approval', 'suspended', 'rejected'].includes(user.status);
+}
+
+export function getLegacyPasswordAccounts(): Array<{ email: string; name: string }> {
+  if (process.env.BARCODEFLOW_DESKTOP !== '1') return [];
+  return getUsers().filter(canInitializeLegacyPassword).map(user => ({ email: user.email, name: user.name }));
+}
+
+export function initializeLegacyPassword(email: string, password: string): void {
+  if (process.env.BARCODEFLOW_DESKTOP !== '1') throw new Error('Password setup requires the local desktop application.');
+  if (typeof email !== 'string' || typeof password !== 'string' || password.length < 12 || password.length > 1024) {
+    throw new Error('Password must contain between 12 and 1024 characters.');
+  }
+  const users = getUsers();
+  const matchingUsers = users.filter(user => user.email?.toLowerCase() === email.trim().toLowerCase());
+  if (matchingUsers.length !== 1 || !canInitializeLegacyPassword(matchingUsers[0])) {
+    throw new Error('This account is not eligible for initial password setup.');
+  }
+  const user = matchingUsers[0];
+  user.passwordHash = hashPassword(password);
+  if (!storage.write('users', users)) throw new Error('Password could not be saved.');
+  logBackendAudit('Local desktop owner', user.role || 'Admin', 'LEGACY_PASSWORD_SETUP',
+    `Initial password set for legacy account ${user.email}`, user.id, user.name);
 }
 
 // Handler: List users
@@ -46,7 +59,7 @@ const handleListUsers = (req: Request, res: Response) => {
   try {
     const users = getUsers();
     const sanitized = users.map((u: any) => {
-      const { password, ...rest } = u;
+      const { password, passwordHash, ...rest } = u;
       return rest;
     });
     res.json(sanitized);
@@ -59,85 +72,20 @@ const handleListUsers = (req: Request, res: Response) => {
 const handleLogin = (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
-    const cleanEmail = email?.trim().toLowerCase();
-    const cleanPassword = password?.trim();
+    const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const cleanPassword = typeof password === 'string' ? password : '';
 
-    if (!cleanEmail) {
-      return res.status(400).json({ success: false, message: 'Email address is required.' });
+    if (!cleanEmail || !cleanPassword || cleanPassword.length > 1024) {
+      return res.status(400).json({ success: false, message: 'Email address and password are required.' });
     }
 
     const users = getUsers();
 
-    // 1. Super Admin Hardened Check
-    if (cleanEmail === 'superadmin@gmail.com') {
-      if (cleanPassword && cleanPassword !== 'superadmin@gmail.com') {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid Super Admin credentials. Password must match superadmin@gmail.com.',
-        });
-      }
-
-      const superAdmin = users.find((u: any) => u.email?.toLowerCase() === 'superadmin@gmail.com') || {
-        id: 'usr-super-admin',
-        name: 'Super Administrator',
-        email: 'superadmin@gmail.com',
-        role: 'Super Admin',
-        department: 'Enterprise Security & Governance',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces',
-        status: 'approved',
-        isApproved: true,
-        permissions: {
-          canDesignTemplates: true,
-          canCreateTemplates: true,
-          canDeleteTemplates: true,
-          canApproveWorkflow: true,
-          canPrintAndSpool: true,
-          canManageDatasets: true,
-          canCalibratePrinters: true,
-          canManageLicense: true,
-          canDownloadDesktopApp: true,
-          canViewAuditLogs: true,
-        },
-      };
-
-      logBackendAudit(
-        superAdmin.name,
-        'Super Admin',
-        'USER_LOGIN',
-        `Super Administrator logged into BarcodeFlow Enterprise Security Console`,
-        superAdmin.id,
-        superAdmin.name
-      );
-
-      const { password: _, ...safeUser } = superAdmin;
-      return res.json({
-        success: true,
-        user: safeUser,
-        token: `token-super-admin-${Date.now()}`,
-        message: 'Welcome Super Administrator! Full system governance granted.',
-      });
-    }
-
-    // 2. Lookup standard User / Admin
-    let user = users.find((u: any) => u.email?.toLowerCase() === cleanEmail);
-
-    if (!user) {
-      const demoUser = INITIAL_USERS.find((u: any) => u.email?.toLowerCase() === cleanEmail);
-      if (demoUser) {
-        user = demoUser;
-      } else {
-        return res.status(401).json({
-          success: false,
-          message: 'User account not found. Please register or check your email.',
-        });
-      }
-    }
-
-    // Verify Password
-    if (user.password && cleanPassword && user.password !== cleanPassword) {
+    const user = users.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+    if (!user || !verifyPassword(user, cleanPassword)) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid password. Please check your credentials.',
+        message: 'Invalid email address or password.',
       });
     }
 
@@ -159,7 +107,11 @@ const handleLogin = (req: Request, res: Response) => {
       });
     }
 
-    // Authenticated successfully
+    if (!user.passwordHash) {
+      user.passwordHash = hashPassword(cleanPassword);
+      delete user.password;
+      storage.write('users', users);
+    }
     logBackendAudit(
       user.name,
       user.role || 'Admin',
@@ -169,7 +121,7 @@ const handleLogin = (req: Request, res: Response) => {
       user.name
     );
 
-    const { password: _, ...safeUser } = user;
+    const { password: omittedPassword, passwordHash: omittedPasswordHash, ...safeUser } = user;
     return res.json({
       success: true,
       user: safeUser,
@@ -185,13 +137,17 @@ const handleLogin = (req: Request, res: Response) => {
 const handleRegister = (req: Request, res: Response) => {
   try {
     const { name, email, password, department, role = 'Admin' } = req.body;
-    const cleanEmail = email?.trim().toLowerCase();
+    const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
-    if (!cleanEmail || !name) {
+    if (!cleanEmail || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ success: false, message: 'Name and email are required.' });
+    }
+    if (typeof password !== 'string' || password.length < 12 || password.length > 1024) {
+      return res.status(400).json({ success: false, message: 'Password must contain between 12 and 1024 characters.' });
     }
 
     const users = getUsers();
+    const initializing = users.length === 0;
 
     // Check if email already exists
     const existing = users.find((u: any) => u.email?.toLowerCase() === cleanEmail);
@@ -207,22 +163,22 @@ const handleRegister = (req: Request, res: Response) => {
       id: `usr-admin-${Date.now()}`,
       name: name.trim(),
       email: cleanEmail,
-      password: password?.trim() || 'password123',
-      role: 'Admin',
+      passwordHash: hashPassword(password),
+      role: initializing ? 'Super Admin' : 'Admin',
       department: department?.trim() || 'Packaging Operations',
       avatar: `https://images.unsplash.com/photo-${1534528741775 + (users.length % 1000)}?w=100&h=100&fit=crop&crop=faces`,
-      status: 'pending_approval',
-      isApproved: false,
+      status: initializing ? 'approved' : 'pending_approval',
+      isApproved: initializing,
       createdAt: new Date().toISOString(),
       permissions: {
         canDesignTemplates: true,
         canCreateTemplates: true,
-        canDeleteTemplates: false,
+        canDeleteTemplates: initializing,
         canApproveWorkflow: true,
         canPrintAndSpool: true,
         canManageDatasets: true,
-        canCalibratePrinters: false,
-        canManageLicense: false,
+        canCalibratePrinters: initializing,
+        canManageLicense: initializing,
         canDownloadDesktopApp: true,
         canViewAuditLogs: true,
       },
@@ -240,12 +196,13 @@ const handleRegister = (req: Request, res: Response) => {
       newUser.name
     );
 
-    const { password: _, ...safeUser } = newUser;
+    const { password: omittedPassword, passwordHash: omittedPasswordHash, ...safeUser } = newUser;
 
     res.status(201).json({
       success: true,
-      message:
-        'Admin registration submitted successfully! Your account is now pending approval by the Super Admin (superadmin@gmail.com). You will be able to log in once approved.',
+      message: initializing
+        ? 'Initial administrator created. Sign in with your chosen credentials.'
+        : 'Admin registration submitted. An existing administrator must approve the account before sign-in.',
       user: safeUser,
     });
   } catch (err: any) {
@@ -302,7 +259,7 @@ usersRouter.patch('/:id/status', (req: Request, res: Response) => {
       users[userIndex].name
     );
 
-    const { password: _, ...safeUser } = users[userIndex];
+    const { password: omittedPassword, passwordHash: omittedPasswordHash, ...safeUser } = users[userIndex];
     res.json({
       success: true,
       message: `Admin ${users[userIndex].name} status updated to ${status.toUpperCase()}`,
@@ -350,7 +307,7 @@ usersRouter.put('/:id/permissions', (req: Request, res: Response) => {
       users[userIndex].name
     );
 
-    const { password: _, ...safeUser } = users[userIndex];
+    const { password: omittedPassword, passwordHash: omittedPasswordHash, ...safeUser } = users[userIndex];
     res.json({
       success: true,
       message: `Permissions updated successfully for ${safeUser.name}`,
@@ -366,6 +323,9 @@ usersRouter.put('/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { name, email, role, department, password, status, permissions } = req.body;
+    if (password !== undefined && (typeof password !== 'string' || password.length < 12 || password.length > 1024)) {
+      return res.status(400).json({ success: false, message: 'Password must contain between 12 and 1024 characters.' });
+    }
 
     const users = getUsers();
     const userIndex = users.findIndex((u: any) => u.id === id);
@@ -380,7 +340,10 @@ usersRouter.put('/:id', (req: Request, res: Response) => {
     if (email && !isSuper) users[userIndex].email = email.trim().toLowerCase();
     if (role && !isSuper) users[userIndex].role = role;
     if (department) users[userIndex].department = department.trim();
-    if (password) users[userIndex].password = password.trim();
+    if (password !== undefined) {
+      users[userIndex].passwordHash = hashPassword(password);
+      delete users[userIndex].password;
+    }
     if (status && !isSuper) {
       users[userIndex].status = status;
       users[userIndex].isApproved = status === 'approved';
@@ -400,7 +363,7 @@ usersRouter.put('/:id', (req: Request, res: Response) => {
       users[userIndex].name
     );
 
-    const { password: _, ...safeUser } = users[userIndex];
+    const { password: omittedPassword, passwordHash: omittedPasswordHash, ...safeUser } = users[userIndex];
     res.json({
       success: true,
       message: `Account details updated for ${safeUser.name}`,

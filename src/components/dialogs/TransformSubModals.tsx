@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { TransformConfig } from '../../types';
-import { X, Plus, Trash2, Code, ShieldCheck } from 'lucide-react';
+import { X, Plus, Trash2, Code, ShieldCheck, Play } from 'lucide-react';
 import { SpecialCharacterModal } from './SpecialCharacterModal';
+import { executeVBScript, createRecordProxy } from '../../services/vbscriptEngine';
+import { insertAtSelection } from '../../services/controlCharacterService';
 
 interface SubModalBaseProps {
   isOpen: boolean;
@@ -485,24 +487,66 @@ export const SearchReplaceModal: React.FC<SubModalBaseProps & { initial?: Transf
 };
 
 // 7. SCRIPT MODAL
-export const ScriptTransformModal: React.FC<SubModalBaseProps & { initial?: TransformConfig['script'] }> = ({
+export const ScriptTransformModal: React.FC<SubModalBaseProps & { initial?: TransformConfig['script']; sampleRecord?: Record<string, any> }> = ({
   isOpen,
   onClose,
   title,
   onApply,
   initial,
+  sampleRecord,
 }) => {
   const [code, setCode] = useState<string>('');
   const [language, setLanguage] = useState<'javascript' | 'vbscript'>('javascript');
+  const [sampleInput, setSampleInput] = useState<string>('SampleValue123');
+  const [testResult, setTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      setCode(initial?.code || 'return value;');
+      setCode(initial?.code || (initial?.language === 'vbscript' ? 'Value = UCase(Value)' : 'return value;'));
       setLanguage(initial?.language || 'javascript');
+      setTestResult(null);
     }
   }, [isOpen, initial]);
 
   if (!isOpen) return null;
+
+  const activeRec = sampleRecord && Object.keys(sampleRecord).length > 0
+    ? sampleRecord
+    : { SKU: '000101', ProductName: 'Sample Product', Price: 500, BatchNo: 'B101', Stock: 20 };
+
+  const handleTest = () => {
+    try {
+      if (language === 'vbscript') {
+        const res = executeVBScript(code, {
+          value: sampleInput,
+          input: sampleInput,
+          record: activeRec,
+        });
+        setTestResult(res.value);
+      } else {
+        const recordProxy = createRecordProxy(activeRec);
+        const scope = {
+          value: sampleInput,
+          input: sampleInput,
+          Value: sampleInput,
+          Input: sampleInput,
+          record: recordProxy,
+          Record: recordProxy,
+          field: recordProxy,
+          Field: recordProxy,
+          Date,
+          Math,
+          String,
+          Number,
+        };
+        const fn = new Function(...Object.keys(scope), `return (function() { ${code.includes('return') ? code : 'return ' + code} })()`);
+        const out = fn(...Object.values(scope));
+        setTestResult(String(out ?? ''));
+      }
+    } catch (err: any) {
+      setTestResult(`[Error: ${err.message}]`);
+    }
+  };
 
   const handleOk = () => {
     onApply({ script: { language, code } });
@@ -519,7 +563,15 @@ export const ScriptTransformModal: React.FC<SubModalBaseProps & { initial?: Tran
           </label>
           <select
             value={language}
-            onChange={(e) => setLanguage(e.target.value as any)}
+            onChange={(e) => {
+              const newLang = e.target.value as 'javascript' | 'vbscript';
+              setLanguage(newLang);
+              if (newLang === 'vbscript' && code === 'return value;') {
+                setCode('Value = UCase(Value)');
+              } else if (newLang === 'javascript' && code === 'Value = UCase(Value)') {
+                setCode('return value.toUpperCase();');
+              }
+            }}
             className="border border-[#cbd5e1] rounded px-2 py-0.5 text-[11px] bg-white text-slate-800"
           >
             <option value="javascript">JavaScript Engine</option>
@@ -528,15 +580,49 @@ export const ScriptTransformModal: React.FC<SubModalBaseProps & { initial?: Tran
         </div>
 
         <textarea
-          rows={7}
+          rows={6}
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          placeholder="// Return modified string e.g. return 'LOT-' + value.toUpperCase();"
+          placeholder={
+            language === 'vbscript'
+              ? 'Value = "LOT-" & UCase(Value)'
+              : '// Return modified string e.g. return "LOT-" + value.toUpperCase();'
+          }
           className="w-full border border-[#cbd5e1] rounded p-2 text-[11.5px] font-mono text-slate-900 bg-slate-50 focus:outline-[#0078d7]"
         />
 
-        <div className="p-2 bg-slate-100 border border-slate-200 rounded text-[10.5px] text-slate-600">
-          <span className="font-semibold">Available Scope:</span> <code>value</code>, <code>input</code>, <code>record</code>, <code>Date</code>, <code>Math</code>, <code>String</code>.
+        {/* Live Test Strip */}
+        <div className="p-2 bg-slate-100 border border-slate-200 rounded text-[11px] space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-600 font-semibold">Test Input:</span>
+            <input
+              type="text"
+              value={sampleInput}
+              onChange={(e) => setSampleInput(e.target.value)}
+              className="px-2 py-0.5 border border-slate-300 rounded bg-white text-slate-800 text-[11px] flex-1"
+            />
+            <button
+              type="button"
+              onClick={handleTest}
+              className="px-2.5 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-medium flex items-center gap-1 cursor-pointer"
+            >
+              <Play className="w-3 h-3" />
+              <span>Test</span>
+            </button>
+          </div>
+          {testResult !== null && (
+            <div className="text-[11px] flex items-center gap-1.5">
+              <span className="text-slate-600 font-semibold">Result:</span>
+              <span className="font-mono font-bold text-blue-900 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                {testResult}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div className="p-2 bg-slate-50 border border-slate-200 rounded text-[10.5px] text-slate-600">
+          <span className="font-semibold">Available Scope:</span>{' '}
+          <code>Value</code>, <code>Record("Field")</code>, <code>Date</code>, <code>Now</code>, <code>Time</code>, <code>DateAdd</code>, <code>FormatDateTime</code>, <code>UCase</code>, <code>Mid</code>, <code>InStr</code>.
         </div>
       </div>
     </ModalWrapper>
@@ -554,6 +640,9 @@ export const PrefixSuffixModal: React.FC<SubModalBaseProps & { initial?: Transfo
   const [prefix, setPrefix] = useState<string>('');
   const [suffix, setSuffix] = useState<string>('');
   const [specialCharTarget, setSpecialCharTarget] = useState<'prefix' | 'suffix' | null>(null);
+  const prefixInputRef = React.useRef<HTMLInputElement>(null);
+  const suffixInputRef = React.useRef<HTMLInputElement>(null);
+  const savedSelectionRef = React.useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
   useEffect(() => {
     if (isOpen) {
@@ -569,11 +658,40 @@ export const PrefixSuffixModal: React.FC<SubModalBaseProps & { initial?: Transfo
     onClose();
   };
 
+  const handleOpenSpecialCharacters = (target: 'prefix' | 'suffix') => {
+    const input = target === 'prefix' ? prefixInputRef.current : suffixInputRef.current;
+    const currentVal = target === 'prefix' ? prefix : suffix;
+    const start = input ? input.selectionStart : (savedSelectionRef.current.start ?? currentVal.length);
+    const end = input ? input.selectionEnd : (savedSelectionRef.current.end ?? currentVal.length);
+    savedSelectionRef.current = { start: start ?? currentVal.length, end: end ?? currentVal.length };
+    setSpecialCharTarget(target);
+  };
+
   const handleInsertChar = (char: string) => {
     if (specialCharTarget === 'prefix') {
-      setPrefix((prev) => prev + char);
+      const { value: nextVal, newCursor } = insertAtSelection(prefix, char, savedSelectionRef.current.start, savedSelectionRef.current.end);
+      savedSelectionRef.current = { start: newCursor, end: newCursor };
+      setPrefix(nextVal);
+      setTimeout(() => {
+        if (prefixInputRef.current) {
+          try {
+            prefixInputRef.current.focus();
+            prefixInputRef.current.setSelectionRange(newCursor, newCursor);
+          } catch {}
+        }
+      }, 0);
     } else if (specialCharTarget === 'suffix') {
-      setSuffix((prev) => prev + char);
+      const { value: nextVal, newCursor } = insertAtSelection(suffix, char, savedSelectionRef.current.start, savedSelectionRef.current.end);
+      savedSelectionRef.current = { start: newCursor, end: newCursor };
+      setSuffix(nextVal);
+      setTimeout(() => {
+        if (suffixInputRef.current) {
+          try {
+            suffixInputRef.current.focus();
+            suffixInputRef.current.setSelectionRange(newCursor, newCursor);
+          } catch {}
+        }
+      }, 0);
     }
   };
 
@@ -586,16 +704,24 @@ export const PrefixSuffixModal: React.FC<SubModalBaseProps & { initial?: Transfo
             <button
               type="button"
               title="Insert Symbols or Special Characters"
-              onClick={() => setSpecialCharTarget('prefix')}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handleOpenSpecialCharacters('prefix')}
               className="px-2 py-0.5 bg-[#f8fafc] hover:bg-[#e2e8f0] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-xs cursor-pointer shadow-2xs"
             >
               Ω
             </button>
           </div>
           <input
+            ref={prefixInputRef}
             type="text"
             value={prefix}
-            onChange={(e) => setPrefix(e.target.value)}
+            onChange={(e) => {
+              setPrefix(e.target.value);
+              savedSelectionRef.current = { start: e.target.selectionStart ?? e.target.value.length, end: e.target.selectionEnd ?? e.target.value.length };
+            }}
+            onSelect={(e) => {
+              savedSelectionRef.current = { start: e.currentTarget.selectionStart ?? 0, end: e.currentTarget.selectionEnd ?? 0 };
+            }}
             placeholder="e.g. SN- or LOT:"
             className="w-full mt-1 border border-[#cbd5e1] rounded px-2 py-1 text-[11.5px] text-slate-800 focus:outline-[#0078d7]"
           />
@@ -606,16 +732,24 @@ export const PrefixSuffixModal: React.FC<SubModalBaseProps & { initial?: Transfo
             <button
               type="button"
               title="Insert Symbols or Special Characters"
-              onClick={() => setSpecialCharTarget('suffix')}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handleOpenSpecialCharacters('suffix')}
               className="px-2 py-0.5 bg-[#f8fafc] hover:bg-[#e2e8f0] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-xs cursor-pointer shadow-2xs"
             >
               Ω
             </button>
           </div>
           <input
+            ref={suffixInputRef}
             type="text"
             value={suffix}
-            onChange={(e) => setSuffix(e.target.value)}
+            onChange={(e) => {
+              setSuffix(e.target.value);
+              savedSelectionRef.current = { start: e.target.selectionStart ?? e.target.value.length, end: e.target.selectionEnd ?? e.target.value.length };
+            }}
+            onSelect={(e) => {
+              savedSelectionRef.current = { start: e.currentTarget.selectionStart ?? 0, end: e.currentTarget.selectionEnd ?? 0 };
+            }}
             placeholder="e.g. /2026 or -A"
             className="w-full mt-1 border border-[#cbd5e1] rounded px-2 py-1 text-[11.5px] text-slate-800 focus:outline-[#0078d7]"
           />

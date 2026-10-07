@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { SYMBOLOGY_CATALOG, SymbologyMetadata, renderBarcodeToCanvas } from '../../services/barcodeEngine';
+import { SYMBOLOGY_CATALOG, generatePureSymbolSVG, renderBarcodeToCanvas } from '../../services/barcodeEngine';
 import { BarcodeSymbology, BarcodeElement } from '../../types';
 import { Search, Folder, ChevronRight, ChevronDown, X, Minus, Square } from 'lucide-react';
 
@@ -25,6 +25,9 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
   const [selectedSymbologyId, setSelectedSymbologyId] = useState<BarcodeSymbology>(currentSymbology);
   const [search, setSearch] = useState('');
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewSymbologyId, setPreviewSymbologyId] = useState<BarcodeSymbology | null>(null);
 
   // Folder categories matching BarTender exactly
   const folders = [
@@ -43,6 +46,8 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setSelectedSymbologyId(currentSymbology || 'posicode-b');
+      setSearch('');
+      setSelectedFolder(SYMBOLOGY_CATALOG.find(item => item.id === currentSymbology)?.folderCategories[0] || 'All Symbologies');
     }
   }, [isOpen, currentSymbology]);
 
@@ -61,13 +66,19 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
 
   // Active selected symbology metadata
   const selectedMeta =
-    SYMBOLOGY_CATALOG.find((s) => s.id === selectedSymbologyId) ||
-    filteredList[0] ||
-    SYMBOLOGY_CATALOG[0];
+    filteredList.find((item) => item.id === selectedSymbologyId) || filteredList[0];
+
+  useEffect(() => {
+    if (selectedMeta && selectedMeta.id !== selectedSymbologyId) setSelectedSymbologyId(selectedMeta.id);
+  }, [selectedMeta?.id, selectedSymbologyId]);
 
   // Render preview barcode on canvas
   useEffect(() => {
-    if (previewCanvasRef.current && selectedMeta) {
+    let active = true;
+    setPreviewError(null);
+    setPreviewSymbologyId(null);
+    if (previewCanvasRef.current) previewCanvasRef.current.width = 0;
+    if (isOpen && previewCanvasRef.current && selectedMeta) {
       const mockElement: BarcodeElement = {
         id: 'preview',
         name: 'Preview',
@@ -93,8 +104,24 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
         checkDigit: true,
       };
 
-      renderBarcodeToCanvas(previewCanvasRef.current, mockElement, 2.5);
+      const stage = document.createElement('canvas');
+      try {
+        generatePureSymbolSVG(mockElement);
+        void renderBarcodeToCanvas(stage, mockElement, 2.5).then(() => {
+          if (!active || !previewCanvasRef.current) return;
+          const canvas = previewCanvasRef.current;
+          canvas.width = stage.width;
+          canvas.height = stage.height;
+          canvas.getContext('2d')?.drawImage(stage, 0, 0);
+          setPreviewSymbologyId(selectedMeta.id);
+        }).catch(error => {
+          if (active) setPreviewError(error instanceof Error ? error.message : String(error));
+        });
+      } catch (error) {
+        setPreviewError(error instanceof Error ? error.message : String(error));
+      }
     }
+    return () => { active = false; };
   }, [selectedMeta, isOpen]);
 
   if (!isOpen) return null;
@@ -112,7 +139,42 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 select-none">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="barcode-picker-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 select-none"
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          onClose();
+        } else if (event.key === 'Tab') {
+          const targets = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input, [tabindex="0"]'));
+          const boundary = event.shiftKey ? targets[0] : targets[targets.length - 1];
+          if (document.activeElement === boundary) {
+            event.preventDefault();
+            (event.shiftKey ? targets[targets.length - 1] : targets[0])?.focus();
+          }
+        } else if ((event.target as HTMLElement).closest('[role="listbox"]')) {
+          if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault();
+            const index = filteredList.findIndex(item => item.id === selectedMeta?.id);
+            const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? filteredList.length - 1 : Math.max(0, Math.min(filteredList.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
+            const next = filteredList[nextIndex];
+            if (next) {
+              setSelectedSymbologyId(next.id);
+              const row = listRef.current?.querySelector<HTMLElement>(`[data-symbology-id="${next.id}"]`);
+              row?.focus();
+              row?.scrollIntoView({ block: 'nearest' });
+            }
+          } else if (event.key === 'Enter') {
+            event.preventDefault();
+            if (!previewError && previewSymbologyId === selectedMeta?.id) handleConfirm();
+          }
+        }
+      }}
+    >
       {/* Classic BarTender "Select Barcode" Window */}
       <div className="w-[660px] max-w-full bg-[#f0f2f5] border-2 border-[#0284c7] rounded-lg shadow-2xl overflow-hidden flex flex-col font-sans text-xs">
         {/* Window Title Bar */}
@@ -125,7 +187,7 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
                 <path d="M14 2v6h6" fill="#0284c7" />
               </svg>
             </div>
-            <span className="font-semibold text-slate-800 text-[13px]">Select Barcode</span>
+            <span id="barcode-picker-title" className="font-semibold text-slate-800 text-[13px]">Select Barcode</span>
           </div>
 
           <div className="flex items-center gap-1">
@@ -228,22 +290,28 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
             </div>
 
             {/* Middle: Symbologies List View */}
-            <div className="h-[145px] bg-white border border-[#94a3b8] rounded-xs overflow-y-auto p-0.5">
+            <div ref={listRef} role="listbox" aria-label="Barcode symbologies" className="h-[145px] bg-white border border-[#94a3b8] rounded-xs overflow-y-auto p-0.5">
               {filteredList.length === 0 ? (
                 <div className="p-4 text-center text-slate-500 text-xs">
                   No matching symbologies found for &quot;{search}&quot;
                 </div>
               ) : (
                 filteredList.map((item) => {
-                  const isSelected = selectedSymbologyId === item.id;
+                  const isSelected = selectedMeta?.id === item.id;
                   return (
                     <div
                       key={item.id}
+                      role="option"
+                      aria-selected={isSelected}
+                      aria-disabled={!!item.unsupportedReason}
+                      tabIndex={isSelected ? 0 : -1}
+                      data-symbology-id={item.id}
                       onClick={() => setSelectedSymbologyId(item.id)}
                       onDoubleClick={() => {
-                        setSelectedSymbologyId(item.id);
-                        onSelectSymbology(item.id);
-                        onClose();
+                        if (previewSymbologyId === item.id && !previewError) {
+                          onSelectSymbology(item.id);
+                          onClose();
+                        }
                       }}
                       className={`flex items-center gap-3 px-2 py-1 cursor-pointer select-none transition-colors ${
                         isSelected
@@ -279,6 +347,7 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
 
                       {/* Symbology Name */}
                       <span className="text-[12px]">{item.name}</span>
+                      {item.unsupportedReason && <span className="text-[10px] text-red-700">Unavailable</span>}
                     </div>
                   );
                 })
@@ -288,14 +357,17 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
             {/* Bottom: Preview Panel with Live Barcode */}
             <div className="flex-1 bg-white border border-[#94a3b8] rounded-xs flex flex-col p-1.5 overflow-hidden">
               <div className="text-[11px] text-slate-700 font-medium pb-1 border-b border-slate-100">
-                Preview: {selectedMeta?.name || 'PosiCode B'}
+                Preview: {selectedMeta?.name || 'No selection'}
               </div>
 
               <div className="flex-1 flex flex-col items-center justify-center p-1 bg-white overflow-hidden">
                 <canvas
                   ref={previewCanvasRef}
+                  aria-label={selectedMeta ? `${selectedMeta.name} barcode preview` : 'No barcode selected'}
+                  data-preview-symbology-id={previewSymbologyId || ''}
                   className="max-h-[110px] max-w-[280px] object-contain"
                 />
+                {previewError && <div role="alert" className="text-red-700 text-xs">{previewError}</div>}
               </div>
             </div>
           </div>
@@ -305,6 +377,7 @@ export const BarcodePickerModal: React.FC<BarcodePickerModalProps> = ({
         <div className="flex items-center justify-end gap-2 px-3 py-2 bg-[#e4ebf5] border-t border-[#cbd5e1]">
           <button
             onClick={handleConfirm}
+            disabled={!selectedMeta || !!previewError || previewSymbologyId !== selectedMeta.id}
             className="px-6 py-1 bg-[#f0f9ff] hover:bg-sky-100 active:bg-sky-200 border border-[#0284c7] text-slate-900 rounded-xs text-[11.5px] font-medium shadow-xs focus:ring-1 focus:ring-sky-500"
           >
             Select

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ShieldCheck,
   Shield,
@@ -19,7 +19,6 @@ import {
   LogIn
 } from 'lucide-react';
 import { UserProfile, UserRole } from '../../types';
-import { INITIAL_USERS } from '../../services/mockDataService';
 import { apiService } from '../../services/apiService';
 
 interface LoginViewProps {
@@ -29,16 +28,67 @@ interface LoginViewProps {
 
 export const LoginView: React.FC<LoginViewProps> = ({
   onLoginSuccess,
-  initialUsers = INITIAL_USERS,
 }) => {
-  const [activeTab, setActiveTab] = useState<'signin' | 'register'>('signin');
+  const [activeTab, setActiveTab] = useState<'signin' | 'register' | 'setup'>('signin');
 
   // Sign In State
-  const [email, setEmail] = useState<string>('shivam@gmail.com');
-  const [password, setPassword] = useState<string>('123456');
+  const [email, setEmail] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [setupAccounts, setSetupAccounts] = useState<Array<{ email: string; name: string }>>([]);
+  const [setupEmail, setSetupEmail] = useState('');
+  const [setupPassword, setSetupPassword] = useState('');
+  const [setupConfirmation, setSetupConfirmation] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    const bridge = window.electronAPI;
+    if (bridge?.listInitialPasswordAccounts) {
+      bridge.listInitialPasswordAccounts().then((accounts: Array<{ email: string; name: string }>) => {
+        if (active) {
+          setSetupAccounts(accounts);
+          setSetupEmail(accounts[0]?.email || '');
+          if (accounts.length === 1) setActiveTab('setup');
+        }
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, []);
+
+  const handlePasswordSetup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setErrorMessage(null);
+    setInfoMessage(null);
+    if (setupPassword.length < 12 || setupPassword.length > 1024) {
+      setErrorMessage('Password must contain between 12 and 1024 characters.');
+      return;
+    }
+    if (setupPassword !== setupConfirmation) {
+      setErrorMessage('Passwords do not match.');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const result = await window.electronAPI.initializeLegacyPassword({ email: setupEmail, password: setupPassword });
+      if (!result.success) {
+        setErrorMessage(result.canceled ? 'Password setup canceled. Account unchanged.' : result.error || 'Password could not be saved.');
+        return;
+      }
+      setSetupAccounts(accounts => accounts.filter(account => account.email !== setupEmail));
+      setEmail(setupEmail);
+      setPassword('');
+      setSetupPassword('');
+      setSetupConfirmation('');
+      setActiveTab('signin');
+      setInfoMessage('Password saved. Sign in with your new password.');
+    } catch {
+      setErrorMessage('Password setup failed. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Register State
   const [regName, setRegName] = useState<string>('');
@@ -63,7 +113,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setIsSubmitting(true);
 
     const cleanEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
+    const cleanPassword = password;
 
     if (!cleanEmail) {
       setErrorMessage('Please enter your email address.');
@@ -72,79 +122,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
 
     try {
-      // 1. Check Super Admin Direct Credentials
-      if (
-        cleanEmail === 'superadmin@gmail.com' &&
-        cleanPassword === 'superadmin@gmail.com'
-      ) {
-        const superAdminUser = INITIAL_USERS.find(
-          (u) => u.email?.toLowerCase() === 'superadmin@gmail.com'
-        ) || {
-          id: 'usr-super-admin',
-          name: 'Super Administrator',
-          email: 'superadmin@gmail.com',
-          role: 'Super Admin',
-          department: 'Enterprise Security & Governance',
-          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces',
-          status: 'approved',
-          isApproved: true,
-        };
-
-        apiService.auth.login({ email: cleanEmail, password: cleanPassword }).catch(() => { });
-        onLoginSuccess(superAdminUser as UserProfile);
-        return;
-      }
-
-      // 2. Check local pending/approved users (instant client-side resolution)
-      try {
-        const savedPendingStr = localStorage.getItem('barcodeflow_pending_users');
-        if (savedPendingStr) {
-          const localPending: UserProfile[] = JSON.parse(savedPendingStr);
-          const found = localPending.find(
-            (u) => u.email?.toLowerCase() === cleanEmail
-          );
-          if (found) {
-            if (found.status === 'pending_approval' || found.isApproved === false) {
-              setErrorMessage(
-                'Your Admin registration is pending approval by the Super Admin. Please contact superadmin@gmail.com for activation.'
-              );
-              setIsSubmitting(false);
-              return;
-            }
-            if (found.status === 'suspended') {
-              setErrorMessage('Your Admin account has been suspended by the Super Administrator.');
-              setIsSubmitting(false);
-              return;
-            }
-            // Approved user -> log in as Admin!
-            apiService.auth.login({ email: cleanEmail, password: cleanPassword }).catch(() => { });
-            onLoginSuccess(found);
-            return;
-          }
-        }
-      } catch {}
-
-      // 3. Check INITIAL_USERS presets (shivam@gmail.com, sarah, etc.)
-      const localApproved = INITIAL_USERS.find(
-        (u) => u.email?.toLowerCase() === cleanEmail
-      );
-      if (localApproved) {
-        if (localApproved.status === 'pending_approval' || localApproved.isApproved === false) {
-          setErrorMessage('Your Admin registration is pending approval by the Super Admin.');
-          setIsSubmitting(false);
-          return;
-        }
-        if (localApproved.status === 'suspended') {
-          setErrorMessage('Your Admin account has been suspended.');
-          setIsSubmitting(false);
-          return;
-        }
-        apiService.auth.login({ email: cleanEmail, password: cleanPassword }).catch(() => { });
-        onLoginSuccess(localApproved);
-        return;
-      }
-
-      // 4. Call Backend API
       try {
         const res = await apiService.auth.login({ email: cleanEmail, password: cleanPassword });
         if (res && res.success && res.user) {
@@ -180,7 +157,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const res = await apiService.auth.register({
         name: regName.trim(),
         email: regEmail.trim(),
-        password: regPassword.trim(),
+        password: regPassword,
         department: regDept.trim(),
         role: 'Admin',
       });
@@ -192,7 +169,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         );
         // Switch to sign in tab prefilled
         setEmail(regEmail.trim());
-        setPassword(regPassword.trim());
+        setPassword(regPassword);
       } else {
         setErrorMessage(res?.message || 'Registration failed.');
       }
@@ -203,15 +180,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
     }
   };
 
-  const handleQuickPreset = (presetEmail: string, presetPass: string) => {
-    setEmail(presetEmail);
-    setPassword(presetPass);
-    setErrorMessage(null);
-    setInfoMessage(null);
-  };
-
   return (
-    <div className="min-h-screen w-full bg-slate-100 flex flex-col items-center justify-center p-4 select-none font-sans relative">
+    <div className="min-h-screen w-full overflow-x-hidden bg-slate-100 flex flex-col items-center justify-center p-4 select-none font-sans relative">
       {/* Background Gradients */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#e2e8f080_1px,transparent_1px),linear-gradient(to_bottom,#e2e8f080_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
       <div className="absolute top-1/4 -left-20 w-96 h-96 bg-blue-400/10 rounded-full blur-3xl pointer-events-none" />
@@ -221,7 +191,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <div className="w-full max-w-4xl bg-white border border-slate-200/90 rounded-3xl shadow-xl overflow-hidden grid grid-cols-1 md:grid-cols-12 z-10">
 
         {/* Left Side: Brand & Role Presets */}
-        <div className="md:col-span-5 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 p-6 sm:p-8 flex flex-col justify-between text-white border-b md:border-b-0 md:border-r border-slate-800">
+        <div className="min-w-0 md:col-span-5 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 p-6 sm:p-8 flex flex-col justify-between text-white border-b md:border-b-0 md:border-r border-slate-800">
           <div>
             {/* Logo */}
             <div className="flex items-center gap-3 mb-6">
@@ -245,34 +215,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </p>
             </div>
 
-            {/* Quick Demo Presets */}
-            <div className="space-y-2.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                Quick Role Presets (Click to Fill)
-              </span>
-
-              {/* Administrator Preset */}
-              <button
-                type="button"
-                onClick={() => handleQuickPreset('shivam@gmail.com', 'password123')}
-                className="w-full p-3 rounded-2xl border border-slate-800 bg-slate-900/60 hover:bg-slate-800/80 text-left transition-all cursor-pointer flex items-center justify-between group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-sm font-bold shadow-xs">
-                    👤
-                  </div>
-                  <div>
-                    <div className="text-xs font-bold text-slate-200 group-hover:text-white">
-                      Administrator (Shivam)
-                    </div>
-                    <div className="text-[10px] text-slate-400 font-mono">shivam@gmail.com</div>
-                  </div>
-                </div>
-                <span className="text-[9px] font-bold bg-emerald-950 text-emerald-300 px-2.5 py-1 rounded-lg uppercase border border-emerald-800 tracking-wider font-mono">
-                  Admin
-                </span>
-              </button>
-            </div>
           </div>
 
           <div className="pt-4 border-t border-slate-800/80 text-[11px] text-slate-500 font-mono flex items-center justify-between">
@@ -285,7 +227,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
         </div>
 
         {/* Right Side: Sign In / Register Form */}
-        <div className="md:col-span-7 p-6 sm:p-8 flex flex-col justify-between bg-white">
+        <div className="min-w-0 md:col-span-7 p-6 sm:p-8 flex flex-col justify-between bg-white">
           <div>
             {/* Tab Selector */}
             <div className="flex bg-slate-100 p-1 rounded-2xl mb-6 text-xs font-bold">
@@ -320,6 +262,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
 
             {/* Alert Messages */}
+            {infoMessage && (
+              <div role="status" className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs rounded-xl mb-4">
+                {infoMessage}
+              </div>
+            )}
             {errorMessage && (
               <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 text-xs rounded-2xl flex items-start gap-2.5 mb-4">
                 <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
@@ -381,6 +328,53 @@ export const LoginView: React.FC<LoginViewProps> = ({
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
+                {setupAccounts.length > 0 && (
+                  <button type="button" disabled={isSubmitting} onClick={() => {
+                    setSetupEmail(setupAccounts.find(account => account.email === email.trim().toLowerCase())?.email || setupAccounts[0].email);
+                    setErrorMessage(null);
+                    setInfoMessage(null);
+                    setActiveTab('setup');
+                  }} className="text-xs text-blue-700 font-bold flex items-center gap-2 py-2">
+                    <KeyRound className="w-4 h-4" /> Set Initial Password
+                  </button>
+                )}
+              </form>
+            )}
+
+            {activeTab === 'setup' && (
+              <form onSubmit={handlePasswordSetup} className="space-y-4">
+                <h2 className="text-sm font-bold text-slate-900">Set Initial Password</h2>
+                <div>
+                  <label htmlFor="setup-email" className="text-xs font-bold text-slate-800 block mb-1.5">Account Email</label>
+                  <select id="setup-email" value={setupEmail} onChange={event => setSetupEmail(event.target.value)} disabled={isSubmitting}
+                    className="w-full min-w-0 bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900">
+                    {setupAccounts.map(account => <option key={account.email} value={account.email}>{account.email}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="setup-password" className="text-xs font-bold text-slate-800 block mb-1.5">New Password</label>
+                  <input id="setup-password" type="password" autoComplete="new-password" required minLength={12} maxLength={1024}
+                    value={setupPassword} onChange={event => setSetupPassword(event.target.value)} disabled={isSubmitting}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900" />
+                </div>
+                <div>
+                  <label htmlFor="setup-confirmation" className="text-xs font-bold text-slate-800 block mb-1.5">Confirm New Password</label>
+                  <input id="setup-confirmation" type="password" autoComplete="new-password" required minLength={12} maxLength={1024}
+                    value={setupConfirmation} onChange={event => setSetupConfirmation(event.target.value)} disabled={isSubmitting}
+                    className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs text-slate-900" />
+                </div>
+                <button type="submit" disabled={isSubmitting}
+                  className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 disabled:opacity-50">
+                  <KeyRound className="w-4 h-4" /> {isSubmitting ? 'Saving Password...' : 'Save Password'}
+                </button>
+                <button type="button" disabled={isSubmitting} onClick={() => {
+                  setSetupPassword('');
+                  setSetupConfirmation('');
+                  setErrorMessage(null);
+                  setActiveTab('signin');
+                }} className="text-xs text-slate-600 flex items-center gap-2 py-2">
+                  <LogIn className="w-4 h-4" /> Back to Sign In
+                </button>
               </form>
             )}
 

@@ -3,9 +3,12 @@ import { DataSourceItem, DataSourceType } from '../../types';
 import { formatCustomDate, evaluateSafeScript } from '../../services/dataSourceEngine';
 import { X, Calendar, Database, Globe, Hash, Save, Code, FileText, ChevronDown, Check, AlertCircle } from 'lucide-react';
 import { SpecialCharacterModal } from './SpecialCharacterModal';
+import { insertAtSelection } from '../../services/controlCharacterService';
+import { CONTROL_CHARACTERS } from '../../services/symbolService';
 
 export type WizardDataSourceType =
   | 'embedded'
+  | 'control-character'
   | 'clock'
   | 'database'
   | 'global'
@@ -54,6 +57,31 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
   // 1. Embedded Data
   const [embeddedValue, setEmbeddedValue] = useState('Sample Text');
   const [embeddedDataType, setEmbeddedDataType] = useState<'text' | 'number' | 'date' | 'time' | 'currency'>('text');
+  const [selectedControlCode, setSelectedControlCode] = useState<string>('CR');
+  const embeddedTextareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const savedSelectionRef = React.useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+
+  const handleOpenSpecialCharacters = () => {
+    const textarea = embeddedTextareaRef.current;
+    const start = textarea ? textarea.selectionStart : (savedSelectionRef.current.start ?? embeddedValue.length);
+    const end = textarea ? textarea.selectionEnd : (savedSelectionRef.current.end ?? embeddedValue.length);
+    savedSelectionRef.current = { start: start ?? embeddedValue.length, end: end ?? embeddedValue.length };
+    setIsSpecialCharModalOpen(true);
+  };
+
+  const handleInsertSpecialChar = (char: string) => {
+    const { value: nextVal, newCursor } = insertAtSelection(embeddedValue, char, savedSelectionRef.current.start, savedSelectionRef.current.end);
+    savedSelectionRef.current = { start: newCursor, end: newCursor };
+    setEmbeddedValue(nextVal);
+    setTimeout(() => {
+      if (embeddedTextareaRef.current) {
+        try {
+          embeddedTextareaRef.current.focus();
+          embeddedTextareaRef.current.setSelectionRange(newCursor, newCursor);
+        } catch {}
+      }
+    }, 0);
+  };
 
   // 2. Clock
   const [clockFormat, setClockFormat] = useState('YYYY-MM-DD');
@@ -79,8 +107,9 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
   const [fileFallbackValue, setFileFallbackValue] = useState('FILE_DATA_SAMPLE');
 
   // 7. Visual Basic Script
-  const [scriptCode, setScriptCode] = useState('Value = "SN-" & Format(Now, "YYYYMMDD")');
+  const [scriptCode, setScriptCode] = useState('"Sample Text"');
   const [scriptLanguage, setScriptLanguage] = useState<'vbscript' | 'javascript'>('vbscript');
+  const [scriptMode, setScriptMode] = useState<'expression' | 'multiline'>('expression');
   const [scriptTestResult, setScriptTestResult] = useState<string | null>(null);
 
   // 8. Printer Code Template Field
@@ -95,10 +124,10 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
       return activeDataset.fields.map((f: any) => (typeof f === 'string' ? f : f.name || f.fieldName));
     }
     if (activeDataset?.records && activeDataset.records.length > 0) {
-      return Object.keys(activeDataset.records[0]);
+      return Object.keys(activeDataset.records[0] || {});
     }
-    if (currentRecord && Object.keys(currentRecord).length > 0) {
-      return Object.keys(currentRecord);
+    if (currentRecord && Object.keys(currentRecord || {}).length > 0) {
+      return Object.keys(currentRecord || {});
     }
     return ['ProductID', 'ProductName', 'Barcode', 'Price', 'Batch', 'ExpiryDate', 'Quantity'];
   }, [activeDataset, currentRecord]);
@@ -107,18 +136,23 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
     if (isOpen) {
       setStep(1);
       setSelectedType('embedded');
+      setTypeDropdownOpen(false);
       setSourceName(`Source ${existingCount + 1}`);
       setEmbeddedValue('Sample Text');
+      setSelectedDatasetId('');
+      setSelectedField('');
       setScriptTestResult(null);
-
-      if (datasets.length > 0) {
-        setSelectedDatasetId(datasets[0].id || 'dataset-1');
-      }
-      if (availableFields.length > 0) {
-        setSelectedField(availableFields[0]);
-      }
     }
-  }, [isOpen, existingCount, datasets, availableFields]);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || datasets.length === 0) return;
+    setSelectedDatasetId((current) =>
+      datasets.some((dataset) => dataset.id === current)
+        ? current
+        : datasets[0].id || 'dataset-1'
+    );
+  }, [isOpen, datasets]);
 
   useEffect(() => {
     if (availableFields.length > 0 && !availableFields.includes(selectedField)) {
@@ -141,6 +175,14 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           <span className="text-blue-900 text-[8.5px] font-extrabold">BT</span>
         </div>
       ),
+    },
+    {
+      type: 'control-character',
+      label: 'Control Character',
+      defaultName: '<CR>',
+      description:
+        'A Control Character data source inserts a standard ASCII control code (such as Carriage Return, Line Feed, Tab, or Group Separator) directly into the stream.',
+      icon: <span className="font-mono font-bold text-blue-600 text-xs px-0.5">«»</span>,
     },
     {
       type: 'clock',
@@ -233,7 +275,7 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           totalRecords: 1,
         },
       };
-      const result = evaluateSafeScript(scriptCode, scopeCtx);
+      const result = evaluateSafeScript(scriptCode, scopeCtx, scriptLanguage, scriptMode);
       setScriptTestResult(result || '[Empty Result]');
     } catch (err: any) {
       setScriptTestResult(`[Error: ${err.message}]`);
@@ -256,6 +298,23 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           enabled: true,
         };
         break;
+
+      case 'control-character': {
+        const cDef = CONTROL_CHARACTERS.find((c) => c.abbr === selectedControlCode) || CONTROL_CHARACTERS.find((c) => c.abbr === 'CR')!;
+        newDs = {
+          id: newId,
+          name: sourceName || `<${cDef.abbr}>`,
+          type: 'control-character',
+          controlCode: cDef.abbr,
+          code: cDef.abbr,
+          decimal: cDef.code,
+          hex: cDef.hex,
+          value: cDef.char,
+          valueEncoding: 'raw',
+          enabled: true,
+        };
+        break;
+      }
 
       case 'clock':
         newDs = {
@@ -333,13 +392,25 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
         break;
 
       case 'script':
+        let scriptOutput = '';
+        try {
+          scriptOutput = evaluateSafeScript(
+            scriptCode,
+            { record: currentRecord || {}, system: { userName: 'Administrator', currentRecordIndex: 0, totalRecords: 1 } },
+            scriptLanguage,
+            scriptMode
+          );
+        } catch (err) {
+          console.error('Unable to evaluate the new script data source:', err);
+        }
         newDs = {
           id: newId,
           name: sourceName || 'VB Script Source',
           type: 'script',
           scriptLanguage,
+          scriptMode,
           scriptCode,
-          value: scriptTestResult && !scriptTestResult.startsWith('[Error') ? scriptTestResult : 'SCRIPT_VAL',
+          value: scriptOutput,
           enabled: true,
         };
         break;
@@ -371,13 +442,13 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
 
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-2xs p-3 select-none">
-      <div className="bg-[#f0f2f5] border border-[#7088a8] shadow-2xl rounded-sm w-[520px] max-w-full overflow-hidden flex flex-col select-none text-[11.5px] text-slate-800 relative z-[1001]">
+      <div className="bg-[#f0f2f5] border border-[#7088a8] shadow-2xl rounded-sm w-[550px] max-w-[96vw] h-[490px] flex flex-col select-none text-[11.5px] text-slate-800 relative z-[1001]">
         
         {/* Title Bar matching Windows BarTender dialog */}
-        <div className="h-7 bg-[#f0f2f5] border-b border-[#cbd5e1] px-2 flex items-center justify-between">
+        <div className="h-7 bg-[#f0f2f5] border-b border-[#cbd5e1] px-2.5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-1.5 font-bold text-slate-800 text-[12px]">
             {/* BarTender Wizard Icon */}
-            <div className="w-3.5 h-3.5 bg-gradient-to-br from-cyan-500 to-blue-700 rounded-xs flex items-center justify-center text-[8px] font-black text-white shadow-2xs">
+            <div className="w-4 h-4 bg-gradient-to-br from-cyan-500 to-blue-700 rounded-xs flex items-center justify-center text-[9px] font-black text-white shadow-2xs">
               ✦
             </div>
             <span>New Data Source Wizard</span>
@@ -391,83 +462,55 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           </button>
         </div>
 
-        {/* Wizard Header Banner with decorative BarTender graphic watermark */}
-        <div className="relative h-18 bg-white border-b border-[#b8c5d6] px-4 py-2.5 flex items-center justify-between overflow-hidden">
+        {/* Wizard Header Banner with authentic BarTender graphic watermark */}
+        <div className="relative h-[68px] bg-gradient-to-r from-white via-white to-sky-50/60 border-b border-[#b8c5d6] px-5 py-2.5 flex items-center justify-between overflow-hidden shrink-0">
           <div className="relative z-10">
             <h3 className="font-bold text-[13.5px] text-slate-900 leading-tight">
               {step === 1 ? 'Select Data Source Type' : `Configure ${currentTypeOption.label}`}
             </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
+            <p className="text-[11.5px] text-slate-500 mt-1">
               {step === 1
                 ? 'Choose the category of data that this source provides.'
                 : 'Specify options and field bindings for this data source.'}
             </p>
           </div>
 
-          {/* Decorative Classic BarTender Blueprint Graphic Banner */}
-          <div className="absolute right-0 top-0 bottom-0 w-52 pointer-events-none opacity-40 flex items-center justify-end overflow-hidden select-none">
-            <svg viewBox="0 0 200 70" className="w-full h-full">
+          {/* Clean BarTender Blueprint Graphic Watermark */}
+          <div className="absolute right-0 top-0 bottom-0 w-48 pointer-events-none opacity-30 flex items-center justify-end overflow-hidden select-none pr-3">
+            <svg viewBox="0 0 160 60" className="w-full h-full">
               <defs>
                 <linearGradient id="wizardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#0284c7" stopOpacity="0.1" />
-                  <stop offset="100%" stopColor="#0369a1" stopOpacity="0.4" />
+                  <stop offset="0%" stopColor="#0284c7" stopOpacity="0.15" />
+                  <stop offset="100%" stopColor="#0369a1" stopOpacity="0.45" />
                 </linearGradient>
               </defs>
-              {/* Background gradient block */}
-              <rect width="200" height="70" fill="url(#wizardGrad)" />
-              {/* Keyboard tiles Q W E R T */}
-              <g fill="#475569" opacity="0.6" fontSize="7" fontWeight="bold" fontFamily="monospace">
-                <rect x="90" y="8" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="92" y="15">Q</text>
-                <rect x="102" y="8" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="104" y="15">W</text>
-                <rect x="114" y="8" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="116" y="15">E</text>
-                <rect x="126" y="8" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="128" y="15">R</text>
-                <rect x="138" y="8" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="140" y="15">T</text>
-                {/* Second row A S D F G */}
-                <rect x="94" y="19" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="96" y="26">A</text>
-                <rect x="106" y="19" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="108" y="26">S</text>
-                <rect x="118" y="19" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="120" y="26">D</text>
-                <rect x="130" y="19" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="132" y="26">F</text>
-                <rect x="142" y="19" width="10" height="9" rx="1" fill="#cbd5e1" stroke="#64748b" strokeWidth="0.5" />
-                <text x="144" y="26">G</text>
-              </g>
-              {/* Binary code strings */}
-              <text x="5" y="16" fill="#0369a1" opacity="0.4" fontSize="6.5" fontFamily="monospace">43597001011101000101</text>
-              <text x="5" y="28" fill="#0369a1" opacity="0.4" fontSize="6.5" fontFamily="monospace">A7-1184-9920-BT-092</text>
-              {/* Clock outline */}
-              <circle cx="168" cy="40" r="18" fill="none" stroke="#0284c7" strokeWidth="1" strokeDasharray="1,1" />
-              <circle cx="168" cy="40" r="15" fill="#f0f9ff" stroke="#0369a1" strokeWidth="1" />
-              <line x1="168" y1="40" x2="168" y2="30" stroke="#0369a1" strokeWidth="1.5" strokeLinecap="round" />
-              <line x1="168" y1="40" x2="176" y2="40" stroke="#0369a1" strokeWidth="1.2" strokeLinecap="round" />
-              {/* Mini barcode lines */}
-              <g fill="#0f172a" opacity="0.5">
-                <rect x="155" y="6" width="1.5" height="12" />
-                <rect x="158" y="6" width="0.8" height="12" />
-                <rect x="160" y="6" width="2" height="12" />
-                <rect x="164" y="6" width="1" height="12" />
-                <rect x="166" y="6" width="1.8" height="12" />
-                <rect x="170" y="6" width="0.8" height="12" />
-                <rect x="172" y="6" width="2.2" height="12" />
-                <rect x="176" y="6" width="1" height="12" />
+              {/* Database Cylinder */}
+              <ellipse cx="40" cy="18" rx="18" ry="6" fill="none" stroke="#0284c7" strokeWidth="1.5" />
+              <path d="M 22,18 L 22,38 A 18,6 0 0,0 58,38 L 58,18" fill="none" stroke="#0284c7" strokeWidth="1.5" />
+              <path d="M 22,28 A 18,6 0 0,0 58,28" fill="none" stroke="#0284c7" strokeWidth="1.5" />
+              {/* Flow Arrow */}
+              <path d="M 64,28 L 84,28 M 79,24 L 85,28 L 79,32" fill="none" stroke="#0369a1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              {/* Clock Outline */}
+              <circle cx="112" cy="28" r="15" fill="none" stroke="#0284c7" strokeWidth="1.5" />
+              <polyline points="112,18 112,28 120,28" fill="none" stroke="#0284c7" strokeWidth="1.5" strokeLinecap="round" />
+              {/* Barcode lines accent */}
+              <g fill="#0f172a" opacity="0.6">
+                <rect x="135" y="14" width="1.5" height="28" />
+                <rect x="138" y="14" width="3" height="28" />
+                <rect x="143" y="14" width="1" height="28" />
+                <rect x="146" y="14" width="2" height="28" />
+                <rect x="150" y="14" width="1.5" height="28" />
               </g>
             </svg>
           </div>
         </div>
 
         {/* Wizard Form Content Area */}
-        <div className="p-5 flex-1 bg-white min-h-[260px] flex flex-col justify-between">
+        <div className="p-5 flex-1 bg-white flex flex-col justify-between overflow-y-auto">
           {step === 1 ? (
             /* STEP 1: SELECT DATA SOURCE TYPE */
             <div className="space-y-4">
-              <p className="text-[11.5px] text-slate-800">
+              <p className="text-[11.5px] text-slate-800 font-medium">
                 Select the type for the new data source:
               </p>
 
@@ -478,23 +521,23 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                   <button
                     type="button"
                     onClick={() => setTypeDropdownOpen(!typeDropdownOpen)}
-                    className="w-full h-6 px-2 bg-white border border-[#94a3b8] rounded-xs flex items-center justify-between text-left hover:border-blue-500 focus:border-blue-600 outline-none shadow-2xs cursor-pointer"
+                    className="w-full h-7 px-2.5 bg-white border border-[#8fa3bc] rounded-xs flex items-center justify-between text-left hover:border-[#0078d7] focus:border-[#0078d7] outline-none shadow-2xs cursor-pointer transition-colors"
                   >
                     <div className="flex items-center gap-2 truncate">
                       <span className="shrink-0">{currentTypeOption.icon}</span>
-                      <span className="font-medium text-slate-900 truncate">{currentTypeOption.label}</span>
+                      <span className="font-semibold text-slate-900 truncate text-[12px]">{currentTypeOption.label}</span>
                     </div>
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0 ml-1" />
+                    <ChevronDown className={`w-3.5 h-3.5 text-slate-500 shrink-0 ml-1 transition-transform ${typeDropdownOpen ? 'rotate-180' : ''}`} />
                   </button>
 
                   {/* Dropdown Menu matching BarTender Options */}
                   {typeDropdownOpen && (
                     <>
                       <div
-                        className="fixed inset-0 z-[1010]"
+                        className="fixed inset-0 z-[1040]"
                         onClick={() => setTypeDropdownOpen(false)}
                       />
-                      <div className="absolute left-0 right-0 top-full mt-0.5 bg-white border border-[#94a3b8] shadow-xl py-0.5 z-[1020] rounded-xs text-[11.5px] max-h-60 overflow-y-auto">
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-[#0078d7] shadow-xl py-1 z-[1050] rounded-xs text-[11.5px] max-h-[210px] overflow-y-auto divide-y divide-slate-100">
                         {typeOptions.map((opt) => {
                           const isSelected = opt.type === selectedType;
                           return (
@@ -502,16 +545,19 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                               key={opt.type}
                               type="button"
                               onClick={() => handleSelectType(opt.type)}
-                              className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left cursor-pointer transition-colors ${
+                              className={`w-full flex items-center gap-2.5 px-3 py-2 text-left cursor-pointer transition-colors ${
                                 isSelected
-                                  ? 'bg-[#0078d7] text-white font-semibold'
-                                  : 'text-slate-800 hover:bg-[#cce0f5]'
+                                  ? 'bg-[#0078d7] text-white font-medium'
+                                  : 'text-slate-800 hover:bg-[#e5f1fb]'
                               }`}
                             >
-                              <span className="w-4 h-4 flex items-center justify-center shrink-0">
+                              <span className="w-5 h-5 flex items-center justify-center shrink-0">
                                 {opt.icon}
                               </span>
-                              <span className="truncate">{opt.label}</span>
+                              <span className="truncate flex-1 font-medium">{opt.label}</span>
+                              {isSelected && (
+                                <Check className="w-3.5 h-3.5 text-white shrink-0 ml-1" />
+                              )}
                             </button>
                           );
                         })}
@@ -528,21 +574,22 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                   type="text"
                   value={sourceName}
                   onChange={(e) => setSourceName(e.target.value)}
-                  className="flex-1 h-6 px-2 border border-[#94a3b8] rounded-xs text-[11.5px] outline-none focus:border-blue-600 bg-white"
+                  className="flex-1 h-7 px-2.5 border border-[#8fa3bc] rounded-xs text-[12px] outline-none focus:border-[#0078d7] bg-white transition-colors"
                   placeholder="Data source name..."
                 />
               </div>
 
               {/* Description Group Box matching BarTender UI */}
-              <fieldset className="border border-[#cbd5e1] rounded-xs p-3 bg-slate-50/50 mt-4">
-                <legend className="px-1 text-[11px] font-semibold text-slate-600">
+              <fieldset className="border border-[#cbd5e1] rounded-xs p-3.5 bg-[#f8fafc] mt-4">
+                <legend className="px-1.5 text-[11px] font-semibold text-slate-700">
                   Description:
                 </legend>
-                <p className="text-[11.5px] text-slate-700 leading-relaxed min-h-[48px]">
+                <p className="text-[11.5px] text-slate-700 leading-relaxed min-h-[56px]">
                   {currentTypeOption.description}
                 </p>
               </fieldset>
             </div>
+
           ) : (
             /* STEP 2: CONFIGURE SPECIFIC DATA SOURCE TYPE */
             <div className="space-y-3.5">
@@ -557,7 +604,8 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                       <button
                         type="button"
                         title="Insert Symbols or Special Characters"
-                        onClick={() => setIsSpecialCharModalOpen(true)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handleOpenSpecialCharacters}
                         className="px-2 py-0.5 bg-[#f8fafc] hover:bg-[#e2e8f0] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-xs cursor-pointer shadow-2xs flex items-center gap-1"
                       >
                         <span>Ω</span>
@@ -566,16 +614,30 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                     </div>
                     <div className="flex items-start gap-2">
                       <textarea
+                        ref={embeddedTextareaRef}
                         rows={3}
                         value={embeddedValue}
-                        onChange={(e) => setEmbeddedValue(e.target.value)}
+                        onChange={(e) => {
+                          setEmbeddedValue(e.target.value);
+                          savedSelectionRef.current = { start: e.target.selectionStart, end: e.target.selectionEnd };
+                        }}
+                        onSelect={(e) => {
+                          savedSelectionRef.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd };
+                        }}
+                        onKeyUp={(e) => {
+                          savedSelectionRef.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd };
+                        }}
+                        onMouseUp={(e) => {
+                          savedSelectionRef.current = { start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd };
+                        }}
                         className="flex-1 p-2 border border-[#94a3b8] rounded-xs text-[11.5px] font-mono outline-none focus:border-blue-600 bg-white"
                         placeholder="Enter embedded string data..."
                       />
                       <button
                         type="button"
                         title="Insert Symbols or Special Characters"
-                        onClick={() => setIsSpecialCharModalOpen(true)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={handleOpenSpecialCharacters}
                         className="w-8 h-8 self-stretch bg-[#f8fafc] hover:bg-[#e2e8f0] border border-[#94a3b8] rounded-xs text-[#003366] font-serif font-bold text-base cursor-pointer shadow-2xs flex items-center justify-center shrink-0"
                       >
                         Ω
@@ -596,6 +658,46 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                       <option value="time">Time</option>
                       <option value="currency">Currency</option>
                     </select>
+                  </div>
+                </div>
+              )}
+
+              {/* 1b. CONTROL CHARACTER CONFIGURATION */}
+              {selectedType === 'control-character' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <label className="font-semibold text-slate-700 w-28">Control Code:</label>
+                    <select
+                      value={selectedControlCode}
+                      onChange={(e) => {
+                        setSelectedControlCode(e.target.value);
+                        setSourceName(`<${e.target.value}>`);
+                      }}
+                      className="h-7 px-2 bg-white border border-[#94a3b8] rounded-xs text-[11.5px] font-mono font-bold outline-none flex-1"
+                    >
+                      {CONTROL_CHARACTERS.map((c) => (
+                        <option key={c.abbr} value={c.abbr}>
+                          {c.abbr} — {c.name} (ASCII {c.code}, Hex 0x{c.hex})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded text-[11.5px] space-y-1">
+                    <p className="text-slate-800">
+                      Standard Representation: <strong className="font-mono text-blue-700">&lt;{selectedControlCode}&gt;</strong>
+                    </p>
+                    <p className="text-slate-600">
+                      {selectedControlCode === 'CR'
+                        ? 'Carriage Return (ASCII 13) causes a line break in Multi-line Text without printing visible text.'
+                        : selectedControlCode === 'LF'
+                        ? 'Line Feed (ASCII 10) causes a line break in Multi-line Text without printing visible text.'
+                        : selectedControlCode === 'HT'
+                        ? 'Horizontal Tab (ASCII 9) introduces tab spacing.'
+                        : selectedControlCode === 'GS'
+                        ? 'Group Separator (ASCII 29) for FNC1/GS1 barcodes.'
+                        : 'ASCII Control Character.'}
+                    </p>
                   </div>
                 </div>
               )}
@@ -822,26 +924,63 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
 
               {/* 7. VISUAL BASIC SCRIPT CONFIGURATION */}
               {selectedType === 'script' && (
-                <div className="space-y-2.5">
+                <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <label className="font-semibold text-slate-800">VBScript Expression / Function:</label>
+                    <div className="flex items-center gap-2">
+                      <label className="font-semibold text-slate-800 text-[12px]">Script Language:</label>
+                      <select
+                        value={scriptLanguage}
+                        onChange={(e) => {
+                          setScriptLanguage(e.target.value as any);
+                          setScriptTestResult(null);
+                        }}
+                        className="h-6 px-2 bg-white border border-[#8fa3bc] rounded-xs text-[11px] font-semibold text-slate-800 outline-none"
+                      >
+                        <option value="vbscript">Visual Basic Script (VBScript)</option>
+                        <option value="javascript">JavaScript (ECMAScript)</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700">
+                      Mode:
+                      <select
+                        aria-label="Script mode"
+                        value={scriptMode}
+                        onChange={(e) => {
+                          setScriptMode(e.target.value as 'expression' | 'multiline');
+                          setScriptTestResult(null);
+                        }}
+                        className="h-6 px-2 bg-white border border-[#8fa3bc] rounded-xs text-[11px] outline-none"
+                      >
+                        <option value="expression">Single-Line Expression</option>
+                        <option value="multiline">Multi-Line Script</option>
+                      </select>
+                    </label>
                     <button
                       type="button"
                       onClick={handleTestScript}
-                      className="h-5 px-2 bg-green-600 hover:bg-green-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                      className="h-6 px-3 bg-[#0078d7] hover:bg-[#006cc1] text-white rounded-xs text-[11px] font-bold cursor-pointer transition-colors shadow-2xs"
                     >
                       Test Expression
                     </button>
                   </div>
                   <textarea
-                    rows={3}
+                    rows={4}
                     value={scriptCode}
-                    onChange={(e) => setScriptCode(e.target.value)}
-                    className="w-full p-2 border border-[#94a3b8] rounded-xs font-mono text-[11px] outline-none focus:border-green-600 bg-white"
-                    placeholder='Value = "BATCH-" & Record("ProductID")'
+                    onChange={(e) => {
+                      setScriptCode(e.target.value);
+                      setScriptTestResult(null);
+                    }}
+                    className="w-full p-2.5 border border-[#8fa3bc] rounded-xs font-mono text-[11.5px] outline-none focus:border-[#0078d7] bg-white transition-colors"
+                    placeholder={
+                      scriptMode === 'expression'
+                        ? (scriptLanguage === 'vbscript' ? '"BATCH-" & Record("ProductID")' : '"BATCH-" + record.ProductID')
+                        : (scriptLanguage === 'vbscript'
+                          ? 'Value = "BATCH-" & Record("ProductID")'
+                          : 'Value = "BATCH-" + (record.ProductID || "");')
+                    }
                   />
                   {scriptTestResult && (
-                    <div className="p-2 bg-slate-50 border border-slate-200 rounded text-[10.5px] flex items-center justify-between">
+                    <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xs text-[11px] flex items-center justify-between">
                       <span className="font-semibold text-slate-700">Evaluated Output:</span>
                       <span className="font-mono font-bold text-slate-900">{scriptTestResult}</span>
                     </div>
@@ -858,7 +997,7 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                       type="text"
                       value={printerFieldTag}
                       onChange={(e) => setPrinterFieldTag(e.target.value)}
-                      className="w-full h-6 px-2 border border-[#94a3b8] rounded-xs font-mono text-[11.5px] outline-none"
+                      className="w-full h-7 px-2.5 border border-[#8fa3bc] rounded-xs font-mono text-[11.5px] outline-none focus:border-[#0078d7]"
                       placeholder="<PRINTER_FIELD_1>"
                     />
                   </div>
@@ -869,7 +1008,7 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
                       type="text"
                       value={printerDefaultValue}
                       onChange={(e) => setPrinterDefaultValue(e.target.value)}
-                      className="w-full h-6 px-2 border border-[#94a3b8] rounded-xs text-[11.5px] outline-none"
+                      className="w-full h-7 px-2.5 border border-[#8fa3bc] rounded-xs text-[11.5px] outline-none focus:border-[#0078d7]"
                     />
                   </div>
                 </div>
@@ -878,14 +1017,14 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           )}
         </div>
 
-        {/* Wizard Footer Navigation matching Screenshot */}
-        <div className="h-10 bg-[#f0f2f5] border-t border-[#cbd5e1] px-4 flex items-center justify-end gap-2">
+        {/* Wizard Footer Navigation matching BarTender UI */}
+        <div className="h-11 bg-[#f0f2f5] border-t border-[#cbd5e1] px-4 flex items-center justify-end gap-2 shrink-0">
           {/* < Back Button */}
           <button
             type="button"
             onClick={() => setStep(1)}
             disabled={step === 1}
-            className="h-6 px-3 bg-white border border-[#94a3b8] hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white rounded-xs text-slate-800 font-medium text-[11px] cursor-pointer"
+            className="h-[24px] min-w-[75px] px-3 bg-white border border-[#94a3b8] hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white rounded-xs text-slate-800 font-medium text-[11.5px] cursor-pointer"
           >
             &lt; Back
           </button>
@@ -901,7 +1040,7 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
               }
             }}
             disabled={step === 2}
-            className="h-6 px-3 bg-white border border-[#94a3b8] hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white rounded-xs text-slate-800 font-medium text-[11px] cursor-pointer"
+            className="h-[24px] min-w-[75px] px-3 bg-white border border-[#94a3b8] hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white rounded-xs text-slate-800 font-medium text-[11.5px] cursor-pointer"
           >
             Next &gt;
           </button>
@@ -910,7 +1049,7 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           <button
             type="button"
             onClick={handleFinish}
-            className="h-6 px-3.5 bg-white border border-[#94a3b8] hover:bg-blue-50 hover:border-blue-500 rounded-xs text-slate-900 font-bold text-[11px] shadow-2xs cursor-pointer ml-1"
+            className="h-[24px] min-w-[75px] px-4 bg-[#0078d7] hover:bg-[#006cc1] border border-[#005a9e] text-white rounded-xs font-semibold text-[11.5px] shadow-xs cursor-pointer ml-1"
           >
             Finish
           </button>
@@ -919,18 +1058,19 @@ export const NewDataSourceWizardModal: React.FC<NewDataSourceWizardModalProps> =
           <button
             type="button"
             onClick={onClose}
-            className="h-6 px-3 bg-white border border-[#94a3b8] hover:bg-slate-50 rounded-xs text-slate-800 font-medium text-[11px] cursor-pointer ml-1"
+            className="h-[24px] min-w-[75px] px-3 bg-white border border-[#94a3b8] hover:bg-slate-50 rounded-xs text-slate-800 font-medium text-[11.5px] cursor-pointer ml-1"
           >
             Cancel
           </button>
         </div>
+
 
       </div>
 
       <SpecialCharacterModal
         isOpen={isSpecialCharModalOpen}
         onClose={() => setIsSpecialCharModalOpen(false)}
-        onInsert={(char) => setEmbeddedValue((prev) => prev + char)}
+        onInsert={handleInsertSpecialChar}
       />
     </div>
   );
